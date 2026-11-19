@@ -1,0 +1,35 @@
+{
+  "languageTag": "th",
+  "scriptFamily": "THAI",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "th_g_01",
+      "utterance": "ตั้งนาฬิกาปลุกเวลา ๐๗:๓๐ น.",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "th_g_02",
+      "utterance": "ตั้งจับเวลา ๕ นาที",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "th_g_03",
+      "utterance": "เปิดโหมดห้ามรบกวน",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "th_g_04",
+      "utterance": "เปิดปฏิทินและจดบันทึกสำหรับพรุ่งนี้",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

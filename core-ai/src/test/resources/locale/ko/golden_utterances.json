@@ -1,0 +1,35 @@
+{
+  "languageTag": "ko",
+  "scriptFamily": "HANGUL",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "ko_g_01",
+      "utterance": "오전 07:30 알람을 설정해 줘",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ko_g_02",
+      "utterance": "5분 타이머 맞춰 줘",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ko_g_03",
+      "utterance": "방해금지 모드를 켜 줘",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ko_g_04",
+      "utterance": "캘린더를 열고 내일 메모를 저장해 줘",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

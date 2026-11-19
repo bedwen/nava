@@ -1,0 +1,116 @@
+{
+  "languageTag": "es",
+  "scriptFamily": "LATIN",
+  "hasLayerRPack": true,
+  "cases": [
+    {
+      "id": "es_alarm_01",
+      "utterance": "Pon una alarma a las 07:30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "07",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "es_alarm_02",
+      "utterance": "¿Pon una alarma a las 7 de la mañana?",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "7",
+        "period_keyword": "manana"
+      }
+    },
+    {
+      "id": "es_alarm_03",
+      "utterance": "Por favor configura una alarma para las 20:15",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "20",
+        "minute": "15"
+      }
+    },
+    {
+      "id": "es_timer_01",
+      "utterance": "Pon un temporizador de 5 minutos",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "5",
+        "duration_unit": "minutos"
+      }
+    },
+    {
+      "id": "es_timer_02",
+      "utterance": "¡Inicia un temporizador de 30 segundos!",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "30",
+        "duration_unit": "segundos"
+      }
+    },
+    {
+      "id": "es_dnd_01",
+      "utterance": "Activa el modo no molestar",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "es_dnd_02",
+      "utterance": "Desactiva no molestar",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "false"
+      }
+    },
+    {
+      "id": "es_volume_01",
+      "utterance": "Pon el volumen al 65",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "65"
+      }
+    },
+    {
+      "id": "es_volume_02",
+      "utterance": "Ajusta el volumen a 40%",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "40"
+      }
+    },
+    {
+      "id": "es_launch_01",
+      "utterance": "Abre la aplicación calendario",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "launch_app",
+      "expectedSlots": {
+        "app_name": "calendario"
+      }
+    },
+    {
+      "id": "es_complex_01",
+      "utterance": "Pon una alarma a las 07:30 y guarda una nota para mañana",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "es_complex_02",
+      "utterance": "Resume mis notificaciones y prepara un mensaje para Lucía",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

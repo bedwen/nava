@@ -1,0 +1,35 @@
+{
+  "languageTag": "he",
+  "scriptFamily": "HEBREW",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "he_g_01",
+      "utterance": "כוון שעון מעורר לשעה 07:30",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "he_g_02",
+      "utterance": "הפעל טיימר ל-5 דקות",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "he_g_03",
+      "utterance": "הפעל מצב נא לא להפריע",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "he_g_04",
+      "utterance": "פתח את היומן וצור פתק למחר",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

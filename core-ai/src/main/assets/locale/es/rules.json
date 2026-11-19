@@ -1,0 +1,103 @@
+{
+  "languageTag": "es",
+  "version": 1,
+  "timeKeywords": {
+    "manana": "am",
+    "tarde": "pm",
+    "noche": "pm",
+    "mediodia": "12:00",
+    "medianoche": "00:00",
+    "segundo": "1",
+    "segundos": "1",
+    "minuto": "60",
+    "minutos": "60",
+    "hora": "3600",
+    "horas": "3600"
+  },
+  "patterns": [
+    {
+      "patternId": "es_set_alarm_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?(?:pon|configura|crea|programa) (?:una )?alarma (?:a la|a las|para las|para la) (\\d{1,2}):(\\d{2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "es_set_alarm_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?(?:pon|configura|crea|programa) (?:una )?alarma (?:a la|a las|para las|para la) (\\d{1,2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "es_set_timer",
+      "toolName": "set_timer",
+      "regexPattern": "^(?:por favor )?(?:pon|inicia|crea|programa) (?:un )?temporizador (?:de|para) (\\d{1,4}) (segundos?|minutos?|horas?)[?!]?$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 110
+    },
+    {
+      "patternId": "es_set_dnd_enable",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:por favor )?(?:activa|enciende|pon) (?:el )?(?:modo )?no molestar[?!]?$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 110
+    },
+    {
+      "patternId": "es_set_dnd_disable",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:por favor )?(?:desactiva|apaga|quita) (?:el )?(?:modo )?no molestar[?!]?$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "false"
+      },
+      "priority": 110
+    },
+    {
+      "patternId": "es_set_volume",
+      "toolName": "set_volume",
+      "regexPattern": "^(?:por favor )?(?:pon|ajusta|cambia) (?:el )?volumen (?:al|a) (\\d{1,3})%?[?!]?$",
+      "slotMappings": {
+        "level": "1"
+      },
+      "staticSlots": {},
+      "priority": 110
+    },
+    {
+      "patternId": "es_launch_app_with_prefix",
+      "toolName": "launch_app",
+      "regexPattern": "^(?:por favor )?(?:abre|inicia|lanza) la aplicacion ([a-z0-9][a-z0-9._-]{0,30}(?: [a-z0-9._-]{1,20})?)[?!]?$",
+      "slotMappings": {
+        "app_name": "1"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "es_launch_app",
+      "toolName": "launch_app",
+      "regexPattern": "^(?:por favor )?(?:abre|inicia|lanza) ([a-z0-9][a-z0-9._-]{0,30}(?: [a-z0-9._-]{1,20})?)[?!]?$",
+      "slotMappings": {
+        "app_name": "1"
+      },
+      "staticSlots": {},
+      "priority": 100
+    }
+  ]
+}

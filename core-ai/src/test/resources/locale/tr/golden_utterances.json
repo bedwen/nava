@@ -1,0 +1,119 @@
+{
+  "languageTag": "tr",
+  "scriptFamily": "LATIN",
+  "hasLayerRPack": true,
+  "cases": [
+    {
+      "id": "tr_alarm_01",
+      "utterance": "Saat 07:30 için alarm kur",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "07",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "tr_alarm_02",
+      "utterance": "Sabah 7 alarm kur",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "period_keyword": "sabah",
+        "hour": "7"
+      }
+    },
+    {
+      "id": "tr_alarm_03",
+      "utterance": "sabah 08:15 icin uyanma alarmi kur",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "period_keyword": "sabah",
+        "hour": "08",
+        "minute": "15",
+        "label": "uyanma"
+      }
+    },
+    {
+      "id": "tr_timer_01",
+      "utterance": "5 dakika zamanlayıcı kur",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "5",
+        "duration_unit": "dakika"
+      }
+    },
+    {
+      "id": "tr_timer_02",
+      "utterance": "10 dakika makarna için zamanlayıcı kur",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "10",
+        "duration_unit": "dakika",
+        "label": "makarna"
+      }
+    },
+    {
+      "id": "tr_dnd_01",
+      "utterance": "Rahatsız etme modunu aç",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "tr_dnd_02",
+      "utterance": "rahatsiz etme modunu kapat",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "false"
+      }
+    },
+    {
+      "id": "tr_volume_01",
+      "utterance": "Sesi 60 yap",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "60"
+      }
+    },
+    {
+      "id": "tr_volume_02",
+      "utterance": "Ses seviyesini 85 olarak ayarla",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "85"
+      }
+    },
+    {
+      "id": "tr_launch_01",
+      "utterance": "Takvim uygulamasını aç",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "launch_app",
+      "expectedSlots": {
+        "app_name": "takvim"
+      }
+    },
+    {
+      "id": "tr_complex_01",
+      "utterance": "Saat 07:30 için alarm kur ve toplantı notu ekle",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "tr_complex_02",
+      "utterance": "Okunmamış bildirimleri özetle ve Ali'ye mesaj taslağı hazırla",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

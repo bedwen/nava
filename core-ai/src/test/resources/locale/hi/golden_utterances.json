@@ -1,0 +1,35 @@
+{
+  "languageTag": "hi",
+  "scriptFamily": "DEVANAGARI",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "hi_g_01",
+      "utterance": "सुबह ०७:३० का अलार्म लगाओ",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "hi_g_02",
+      "utterance": "५ मिनट का टाइमर लगाओ",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "hi_g_03",
+      "utterance": "परेशान न करें मोड चालू करो",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "hi_g_04",
+      "utterance": "कैलेंडर खोलो और कल के लिए नोट लिखो",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

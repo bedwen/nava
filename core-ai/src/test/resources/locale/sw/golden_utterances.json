@@ -1,0 +1,35 @@
+{
+  "languageTag": "sw",
+  "scriptFamily": "LATIN",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "sw_g_01",
+      "utterance": "Weka kengele saa 07:30",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "sw_g_02",
+      "utterance": "Weka kipima muda cha dakika 5",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "sw_g_03",
+      "utterance": "Washa hali ya usisumbue",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "sw_g_04",
+      "utterance": "Fungua kalenda na uhifadhi ujumbe wa kesho",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

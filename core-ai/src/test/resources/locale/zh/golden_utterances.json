@@ -1,0 +1,35 @@
+{
+  "languageTag": "zh",
+  "scriptFamily": "CJK",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "zh_g_01",
+      "utterance": "设置０７：３０的闹钟",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "zh_g_02",
+      "utterance": "设置5分钟计时器",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "zh_g_03",
+      "utterance": "开启勿扰模式",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "zh_g_04",
+      "utterance": "打开日历并保存明天的笔记",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

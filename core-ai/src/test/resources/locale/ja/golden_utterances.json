@@ -1,0 +1,35 @@
+{
+  "languageTag": "ja",
+  "scriptFamily": "CJK",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "ja_g_01",
+      "utterance": "０７：３０にアラームを設定して",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ja_g_02",
+      "utterance": "5分のタイマーを開始して",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ja_g_03",
+      "utterance": "おやすみモードをオンにして",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ja_g_04",
+      "utterance": "カレンダーを開いて明日のメモを保存して",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

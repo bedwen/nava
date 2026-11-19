@@ -1,0 +1,35 @@
+{
+  "languageTag": "ru",
+  "scriptFamily": "CYRILLIC",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "ru_g_01",
+      "utterance": "Поставь будильник на 07:30",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ru_g_02",
+      "utterance": "Поставь таймер на 5 минут",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ru_g_03",
+      "utterance": "Включи режим не беспокоить",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "ru_g_04",
+      "utterance": "Открой календарь и запиши заметку на завтра",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

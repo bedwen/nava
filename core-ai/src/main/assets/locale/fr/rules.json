@@ -1,0 +1,103 @@
+{
+  "languageTag": "fr",
+  "version": 1,
+  "timeKeywords": {
+    "matin": "am",
+    "soir": "pm",
+    "nuit": "pm",
+    "midi": "12:00",
+    "minuit": "00:00",
+    "seconde": "1",
+    "secondes": "1",
+    "minute": "60",
+    "minutes": "60",
+    "heure": "3600",
+    "heures": "3600"
+  },
+  "patterns": [
+    {
+      "patternId": "fr_set_alarm_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:regle|mets|cree|ajoute) (?:une )?alarme (?:a|pour) (\\d{1,2})[:h](\\d{2})(?: du (matin|soir))?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "fr_set_alarm_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:regle|mets|cree|ajoute) (?:une )?alarme (?:a|pour) (\\d{1,2})(?: heures?)?(?: du (matin|soir))?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 110
+    },
+    {
+      "patternId": "fr_set_timer",
+      "toolName": "set_timer",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:mets|regle|lance|demarre) (?:une? )?(?:minuteur|minuterie) (?:de|pour) (\\d{1,4}) (secondes?|minutes?|heures?)$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 110
+    },
+    {
+      "patternId": "fr_set_dnd_enable",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:active|mets) (?:le mode )?ne pas deranger$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 110
+    },
+    {
+      "patternId": "fr_set_dnd_disable",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:desactive|coupe|arrete) (?:le mode )?ne pas deranger$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "false"
+      },
+      "priority": 110
+    },
+    {
+      "patternId": "fr_set_volume",
+      "toolName": "set_volume",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:mets|regle|ajuste) (?:le )?volume (?:a|au) (\\d{1,3})%?$",
+      "slotMappings": {
+        "level": "1"
+      },
+      "staticSlots": {},
+      "priority": 110
+    },
+    {
+      "patternId": "fr_launch_app_with_prefix",
+      "toolName": "launch_app",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:ouvre|lance|demarre) (?:l'|l )?application ([a-z0-9][a-z0-9._-]{0,30}(?: [a-z0-9._-]{1,20})?)$",
+      "slotMappings": {
+        "app_name": "1"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "fr_launch_app",
+      "toolName": "launch_app",
+      "regexPattern": "^(?:s il te plait |s'il te plait |il te plait |stp )?(?:ouvre|lance|demarre) (?:l'|l )?([a-z0-9][a-z0-9._-]{0,30}(?: [a-z0-9._-]{1,20})?)$",
+      "slotMappings": {
+        "app_name": "1"
+      },
+      "staticSlots": {},
+      "priority": 100
+    }
+  ]
+}

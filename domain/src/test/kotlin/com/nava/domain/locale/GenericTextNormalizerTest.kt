@@ -57,6 +57,8 @@ class GenericTextNormalizerTest {
 
         val chinese = normalizer.normalize("\u660E\u5929\u65E9\u4E0A\u4E03\u70B9", "zh-CN")
         assertFalse(chinese.tokens.isEmpty())
+        assertTrue(chinese.tokens.size > 1)
+        assertEquals(6, chinese.tokens.size)
         assertTrue(chinese.tokens.all { it.isNotBlank() })
 
         val thai = normalizer.normalize("\u0E15\u0E31\u0E49\u0E07\u0E19\u0E32\u0E2C\u0E34\u0E01\u0E32", "th")

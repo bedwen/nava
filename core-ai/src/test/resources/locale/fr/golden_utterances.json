@@ -1,0 +1,116 @@
+{
+  "languageTag": "fr",
+  "scriptFamily": "LATIN",
+  "hasLayerRPack": true,
+  "cases": [
+    {
+      "id": "fr_alarm_01",
+      "utterance": "Règle une alarme à 7h30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "7",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "fr_alarm_02",
+      "utterance": "Mets une alarme à 07:30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "07",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "fr_alarm_03",
+      "utterance": "Règle une alarme à 7 heures du matin",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "7",
+        "period_keyword": "matin"
+      }
+    },
+    {
+      "id": "fr_timer_01",
+      "utterance": "Mets un minuteur de 5 minutes",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "5",
+        "duration_unit": "minutes"
+      }
+    },
+    {
+      "id": "fr_timer_02",
+      "utterance": "Lance une minuterie de 2 heures",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "2",
+        "duration_unit": "heures"
+      }
+    },
+    {
+      "id": "fr_dnd_01",
+      "utterance": "Active le mode ne pas déranger",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "fr_dnd_02",
+      "utterance": "Désactive le mode ne pas déranger",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "false"
+      }
+    },
+    {
+      "id": "fr_volume_01",
+      "utterance": "Mets le volume à 75",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "75"
+      }
+    },
+    {
+      "id": "fr_volume_02",
+      "utterance": "Règle le volume à 50%",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "50"
+      }
+    },
+    {
+      "id": "fr_launch_01",
+      "utterance": "Ouvre l'application horloge",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "launch_app",
+      "expectedSlots": {
+        "app_name": "horloge"
+      }
+    },
+    {
+      "id": "fr_complex_01",
+      "utterance": "Règle une alarme à 7h30 et enregistre une note sur la réunion",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "fr_complex_02",
+      "utterance": "Résume mes notifications et prépare un SMS pour Camille",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

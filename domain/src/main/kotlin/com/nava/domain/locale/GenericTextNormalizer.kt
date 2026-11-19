@@ -121,12 +121,40 @@ class GenericTextNormalizer(
         while (end != BreakIterator.DONE) {
             val segment = text.substring(start, end).trim()
             if (segment.isNotEmpty() && containsLetterOrDigit(segment)) {
-                tokens.add(segment)
+                if (isMultiCodePointPureHan(segment)) {
+                    appendCodePointTokens(segment, tokens)
+                } else {
+                    tokens.add(segment)
+                }
             }
             start = end
             end = iterator.next()
         }
         return tokens
+    }
+
+    private fun isMultiCodePointPureHan(segment: String): Boolean {
+        var index = 0
+        var count = 0
+        while (index < segment.length) {
+            val cp = segment.codePointAt(index)
+            if (Character.UnicodeScript.of(cp) != Character.UnicodeScript.HAN) {
+                return false
+            }
+            count++
+            index += Character.charCount(cp)
+        }
+        return count > 1
+    }
+
+    private fun appendCodePointTokens(segment: String, target: MutableList<String>) {
+        var index = 0
+        while (index < segment.length) {
+            val cp = segment.codePointAt(index)
+            val nextIndex = index + Character.charCount(cp)
+            target.add(segment.substring(index, nextIndex))
+            index = nextIndex
+        }
     }
 
     private fun containsLetterOrDigit(segment: String): Boolean {

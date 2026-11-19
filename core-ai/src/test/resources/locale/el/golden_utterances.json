@@ -1,0 +1,35 @@
+{
+  "languageTag": "el",
+  "scriptFamily": "GREEK",
+  "hasLayerRPack": false,
+  "cases": [
+    {
+      "id": "el_g_01",
+      "utterance": "Βάλε ξυπνητήρι στις 07:30",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "el_g_02",
+      "utterance": "Βάλε χρονόμετρο για 5 λεπτά",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "el_g_03",
+      "utterance": "Ενεργοποίησε τη λειτουργία μην ενοχλείτε",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "el_g_04",
+      "utterance": "Άνοιξε το ημερολόγιο για αύριο",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

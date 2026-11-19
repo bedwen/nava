@@ -1,0 +1,121 @@
+{
+  "languageTag": "en",
+  "scriptFamily": "LATIN",
+  "hasLayerRPack": true,
+  "cases": [
+    {
+      "id": "en_alarm_01",
+      "utterance": "Set an alarm for 07:30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "07",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "en_alarm_02",
+      "utterance": "Please set alarm at 6:45 pm",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "6",
+        "minute": "45",
+        "meridiem": "pm"
+      }
+    },
+    {
+      "id": "en_alarm_03",
+      "utterance": "Set an alarm for 7 in the morning",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "7",
+        "period_keyword": "morning"
+      }
+    },
+    {
+      "id": "en_alarm_04",
+      "utterance": "Set alarm for 08:00 am labeled standup",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "08",
+        "minute": "00",
+        "meridiem": "am",
+        "label": "standup"
+      }
+    },
+    {
+      "id": "en_timer_01",
+      "utterance": "Set a timer for 5 minutes",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "5",
+        "duration_unit": "minutes"
+      }
+    },
+    {
+      "id": "en_timer_02",
+      "utterance": "Start timer for 10 min for pasta",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "10",
+        "duration_unit": "min",
+        "label": "pasta"
+      }
+    },
+    {
+      "id": "en_dnd_01",
+      "utterance": "Turn on do not disturb",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "en_dnd_02",
+      "utterance": "Disable dnd",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "false"
+      }
+    },
+    {
+      "id": "en_volume_01",
+      "utterance": "Set the volume to 75%",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "75"
+      }
+    },
+    {
+      "id": "en_launch_01",
+      "utterance": "Open calendar",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "launch_app",
+      "expectedSlots": {
+        "app_name": "calendar"
+      }
+    },
+    {
+      "id": "en_complex_01",
+      "utterance": "Set an alarm for 07:30 and save a note about tomorrow",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    },
+    {
+      "id": "en_complex_02",
+      "utterance": "Summarize my unread notifications and draft a reply to Alex",
+      "expectedTier": "NO_MATCH_TIER_1",
+      "expectedTool": null,
+      "expectedSlots": {}
+    }
+  ]
+}

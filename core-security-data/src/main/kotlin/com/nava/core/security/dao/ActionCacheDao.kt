@@ -5,48 +5,24 @@ import com.nava.core.security.storage.DecryptedRow
 import com.nava.core.security.storage.EncryptedSqliteStore
 import com.nava.core.security.storage.EncryptedTableSchema
 import com.nava.core.security.storage.StructuredPayloadCodec
+import com.nava.domain.ai.ActionCachePort
 import com.nava.domain.security.DataProvenance
 
 /**
- * Parameterized Tier 2 plan skeleton cached under `(languageCode, canonicalSkeleton)`.
- *
- * `CapabilityToken`s and untrusted/Vault slot values are never persisted inside cached templates
- * (PLAN.md Section 3.1 & 6.3).
+ * Source-compatible alias for the canonical `:domain` [com.nava.domain.ai.CachedActionTemplate].
  */
-data class CachedActionTemplate(
-    val languageCode: String,
-    val canonicalSkeleton: String,
-    val toolNames: List<String>,
-    val toolSchemaVersions: Map<String, Int>,
-    val serializedPlanTemplate: String,
-    val lastUsedEpochSec: Long
-) {
-    init {
-        require(languageCode.isNotBlank()) { "CachedActionTemplate languageCode must not be blank" }
-        require(canonicalSkeleton.isNotBlank()) { "CachedActionTemplate canonicalSkeleton must not be blank" }
-        require(toolNames.isNotEmpty()) { "CachedActionTemplate toolNames must not be empty" }
-        require(toolNames.all { it.isNotBlank() }) { "CachedActionTemplate toolNames entries must not be blank" }
-        require(serializedPlanTemplate.isNotBlank()) {
-            "CachedActionTemplate serializedPlanTemplate must not be blank"
-        }
-        for ((toolName, version) in toolSchemaVersions) {
-            require(toolName.isNotBlank()) { "CachedActionTemplate toolSchemaVersions key must not be blank" }
-            require(version > 0) {
-                "CachedActionTemplate schema version for '$toolName' must be positive, got $version"
-            }
-        }
-    }
-}
+typealias CachedActionTemplate = com.nava.domain.ai.CachedActionTemplate
 
 /**
- * Tier 2 encrypted skeleton cache DAO over [EncryptedSqliteStore] (`action_cache` table).
+ * Tier 2 encrypted skeleton cache DAO implementing [ActionCachePort] over [EncryptedSqliteStore]
+ * (`action_cache` table).
  *
  * Enforces PLAN.md Section 3.1 Cache Admission Policy, `HMAC-SHA256(languageCode + "\u0000" + canonicalSkeleton)`
  * blind indexing, [MAX_CACHE_ENTRIES] LRU eviction, and tool-schema / profile invalidation.
  */
 class ActionCacheDao(
     private val store: EncryptedSqliteStore
-) {
+) : ActionCachePort {
 
     /**
      * Persists [template] if and only if 100% of slot values originated from
@@ -55,7 +31,7 @@ class ActionCacheDao(
      * Throws [SecurityException] if admission policy is violated, then enforces
      * [MAX_CACHE_ENTRIES] LRU eviction.
      */
-    suspend fun putTemplate(
+    override suspend fun putTemplate(
         template: CachedActionTemplate,
         provenance: DataProvenance,
         touchesVault: Boolean,
@@ -89,7 +65,7 @@ class ActionCacheDao(
      * Performs an O(1) blind-index lookup for `(languageCode, canonicalSkeleton)`, refreshes its
      * LRU timestamp via [EncryptedSqliteStore.touchUpdatedEpochSec], and returns the template.
      */
-    suspend fun findTemplate(
+    override suspend fun findTemplate(
         languageCode: String,
         canonicalSkeleton: String,
         nowEpochSec: Long
@@ -128,7 +104,7 @@ class ActionCacheDao(
      * Removes cached templates referencing [toolName] whose stored schema version differs from
      * [currentSchemaVersion]. Returns the number of invalidated entries.
      */
-    suspend fun invalidateForToolSchemaChange(
+    override suspend fun invalidateForToolSchemaChange(
         toolName: String,
         currentSchemaVersion: Int
     ): Int {
@@ -162,7 +138,7 @@ class ActionCacheDao(
     }
 
     /** Clears all cached templates (e.g., on `PermissionProfile` change). */
-    suspend fun invalidateAll(): Int {
+    override suspend fun invalidateAll(): Int {
         return store.evictLru(EncryptedTableSchema.TABLE_ACTION_CACHE, 0)
     }
 
