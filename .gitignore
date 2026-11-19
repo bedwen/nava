@@ -1,0 +1,127 @@
+# ==============================================================================
+# NAVA -- Git Ignore Rules
+# Strict Rule: Only pure production/test source code and build scripts go to GitHub.
+# Internal planning, AI agent constitutions, local spikes, models, and secrets
+# MUST NEVER be committed or pushed to remote repositories.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. AI Orchestration, Internal Planning & Review Documents (LOCAL ONLY)
+# ------------------------------------------------------------------------------
+/PLAN.md
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/CURSOR.md
+/COPILOT.md
+/docs/reviews/
+/docs/spikes/
+/docs/internal/
+/docs/agents/
+/docs/prompts/
+*.agent.md
+*.plan.md
+*.prompt.md
+
+# AI IDE & Agent Directories / Configs
+.gemini/
+.antigravity/
+.claude/
+.cursor/
+.cursorrules
+.cursorignore
+.windsurf/
+.windsurfrules
+.aider*
+.copilot/
+.continue/
+.roo/
+.cline/
+.openhands/
+.zed/
+
+# ------------------------------------------------------------------------------
+# 2. On-Device LLM Model Weights & Test Binaries (Never commit multi-GB weights)
+# ------------------------------------------------------------------------------
+*.litertlm
+*.tflite
+*.task
+*.bin
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+/models/
+**/assets/models/
+
+# ------------------------------------------------------------------------------
+# 3. Signing Keys, Certificates, Secrets & Local Environments
+# ------------------------------------------------------------------------------
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.der
+keystore.properties
+signing.properties
+local.properties
+secrets.properties
+.env
+.env.*
+google-services.json
+
+# ------------------------------------------------------------------------------
+# 4. Android, Gradle & Kotlin Build Artifacts
+# ------------------------------------------------------------------------------
+.gradle/
+.kotlin/
+**/build/
+!**/src/**/build/
+out/
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+*.ap_
+*.aab_
+*.dex
+*.class
+*.hprof
+*.trace
+hs_err_pid*
+replay_pid*
+
+# ------------------------------------------------------------------------------
+# 5. Android Studio / IntelliJ IDEA / VS Code
+# ------------------------------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+.vscode/
+.fleet/
+.settings/
+.project
+.classpath
+
+# ------------------------------------------------------------------------------
+# 6. OS, Temporary & Scratch Files
+# ------------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+*.log
+/tmp/
+/scratch/

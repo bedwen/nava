@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nava</string>
+    <string name="action_approve">Approve</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="warning_untrusted_external_source">Extracted from untrusted external source</string>
+    <string name="error_permission_denied">Action blocked by your permission profile</string>
+    <string name="error_tool_not_found">Requested automation tool is not available</string>
+    <string name="error_security_violation">Action blocked by security policy</string>
+    <string name="error_model_unavailable">On-device language model is unavailable</string>
+    <string name="error_thought_budget_exceeded">Reasoning limit reached; please rephrase your request</string>
+    <string name="error_clarification_needed">Please clarify what you would like Nava to do</string>
+</resources>

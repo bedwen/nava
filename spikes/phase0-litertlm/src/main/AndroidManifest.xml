@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Zero INTERNET and zero MANAGE_EXTERNAL_STORAGE permissions (Iron Law 3). -->
+
+    <application
+        android:allowBackup="false"
+        android:label="Nava Phase 0 Spike"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <!-- Required on Android 12+ (minSdk >= 31) for LiteRT-LM Backend.GPU() OpenCL loading. -->
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+
+        <activity
+            android:name=".Phase0SpikeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
