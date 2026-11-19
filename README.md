@@ -18,7 +18,7 @@ Its core goal is to provide fast, private on-device automation without cloud dep
 
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
-| **Phase 0** | On-Device LiteRT-LM & Provisioning Feasibility Spike (`spikes/phase0-litertlm/`, [PHASE_0_FEASIBILITY_REPORT.md](docs/spikes/PHASE_0_FEASIBILITY_REPORT.md)) | `SDK_AND_ARCHITECTURE_VERIFIED / ON_DEVICE_RUN_PENDING` |
+| **Phase 0** | On-Device LiteRT-LM & Provisioning Feasibility Spike (`spikes/phase0-litertlm/`) | `SDK_AND_ARCHITECTURE_VERIFIED / ON_DEVICE_RUN_PENDING` |
 | **Phase 1** | 5-Module Gradle Skeleton, Gate 1 Guard (`scripts/verify_architecture.sh`), and `:domain` Pure Kotlin Contracts | `COMPLETED` |
 | **Phase 2** | `:core-security-data` (Keystore `AES-256-GCM`, `EncryptedSqliteStore`, `Nava Vault`, `PermissionProfile`, `RuleCapabilityGrant`, `AuditLogDao`, `BlindSlotExtractor`, `SecurityFirewall`, Gate 2 red-team suites) | `COMPLETED` |
 | **Phase 3** | `:core-ai` (3-Tier Hybrid Router, `LiteRtLlmEngine`, `DynamicToolPruner`, `MicroDslParser`, `ThermalModelLifecycleManager`, SAF SHA-256 model provisioning, `LanguageDetector`, Layer R rule packs) | `NEXT` |
@@ -64,9 +64,9 @@ Nava is structured into **5 Gradle modules** with dependencies pointing strictly
 
 ---
 
-## Verification & Documentation
+## Verification
 
-Nava uses a **Risk-Tiered Triple-Gate Verification Pipeline**:
+Nava uses a **Risk-Tiered Verification Pipeline**:
 
 1. **Gate 1 (Deterministic Architecture Guard):** Checks manifest permissions, dependency allowlist, `:domain` purity, Neural Canvas allocation rules, and English/ASCII codebase rules:
    ```bash
@@ -74,19 +74,13 @@ Nava uses a **Risk-Tiered Triple-Gate Verification Pipeline**:
    # or directly:
    bash scripts/verify_architecture.sh
    ```
-2. **Gate 2 (Adversarial Red-Team & Invariant Suites):** Independent red-team tests covering prompt injection, `Tainted<T>` escalation, IPC exfiltration, cryptographic `AAD` integrity, and multilingual normalization.
-3. **Gate 3 (Four-Eyes Principal Review):** Independent audit against [PLAN.md](PLAN.md) and [AGENTS.md](AGENTS.md).
+2. **Gate 2 (Adversarial Red-Team & Invariant Suites):** Security and invariant test suites covering prompt injection, `Tainted<T>` escalation, IPC exfiltration, cryptographic `AAD` integrity, and multilingual normalization.
 
 Run unit tests for implemented modules with:
 
 ```bash
 ./gradlew test
 ```
-
-For full architectural specifications and orchestration rules, see:
-* [PLAN.md](PLAN.md) -- Architecture, Design, and Implementation Plan
-* [AGENTS.md](AGENTS.md) -- Multi-Agent Orchestration and Engineering Constitution
-* [PHASE_0_FEASIBILITY_REPORT.md](docs/spikes/PHASE_0_FEASIBILITY_REPORT.md) -- Phase 0 LiteRT-LM Feasibility Report
 
 ---
 
