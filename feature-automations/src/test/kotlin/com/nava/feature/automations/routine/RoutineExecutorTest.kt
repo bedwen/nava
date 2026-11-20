@@ -25,6 +25,7 @@ import com.nava.domain.tool.ToolResult
 import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.UserMessage
 import com.nava.feature.automations.common.AutomationNotificationBridge
+import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.CompletionNotificationRequest
 import com.nava.feature.automations.common.ForegroundNotificationSpec
 import com.nava.feature.automations.common.InteractiveNotificationRequest
@@ -313,6 +314,74 @@ class RoutineExecutorTest {
         val escalated = outcome as RoutineExecutionOutcome.EscalatedToInteractive
         assertEquals(listOf("interactive_only_tool"), escalated.pendingToolNames)
         assertEquals(1, fakeNotificationBridge.interactiveRequests.size)
+    }
+
+    @Test
+    fun vaultToolEscalatesWithBiometricEvenWhenRuleSpecClaimsFalse() = runBlocking {
+        toolRegistry.register(
+            FakeTool(
+                name = AutomationToolNames.VAULT_READ,
+                requiredCapability = AtomicCapability.DATA_READ,
+                supportsUnattendedRule = false
+            )
+        )
+
+        val grant = RuleCapabilityGrant(
+            grantId = "grant_vault_spoof",
+            ruleId = "rule_vault_spoof",
+            triggerSpec = RuleTriggerSpec("interval"),
+            staticActions = listOf(
+                RuleActionSpec(
+                    toolName = AutomationToolNames.VAULT_READ,
+                    requiredCapability = AtomicCapability.DATA_READ,
+                    requiresBiometric = false
+                )
+            ),
+            approvalState = RuleApprovalState.APPROVED_ACTIVE,
+            sealHmacHex = "valid_seal"
+        )
+        fakeRuleGrantPort.putRule(grant)
+
+        val outcome = routineExecutor.executeRule("rule_vault_spoof", 1000L)
+        assertTrue(outcome is RoutineExecutionOutcome.EscalatedToInteractive)
+        val escalated = outcome as RoutineExecutionOutcome.EscalatedToInteractive
+        assertTrue("Must preserve requiresBiometric=true for vault tool", escalated.requiresBiometric)
+        assertEquals(MessageKey.ROUTINE_ESCALATED_BIOMETRIC, escalated.message.key)
+        assertEquals(1, fakeNotificationBridge.interactiveRequests.size)
+        assertTrue(fakeNotificationBridge.interactiveRequests.first().requiresBiometric)
+    }
+
+    @Test
+    fun capabilityMismatchRejectsAsDeniedWithAuditLog() = runBlocking {
+        toolRegistry.register(
+            FakeTool(
+                name = AutomationToolNames.LAUNCH_APP,
+                requiredCapability = AtomicCapability.APP_LAUNCH,
+                supportsUnattendedRule = true
+            )
+        )
+
+        val grant = RuleCapabilityGrant(
+            grantId = "grant_mismatch",
+            ruleId = "rule_mismatch",
+            triggerSpec = RuleTriggerSpec("interval"),
+            staticActions = listOf(
+                RuleActionSpec(
+                    toolName = AutomationToolNames.LAUNCH_APP,
+                    requiredCapability = AtomicCapability.DATA_READ,
+                    requiresBiometric = false
+                )
+            ),
+            approvalState = RuleApprovalState.APPROVED_ACTIVE,
+            sealHmacHex = "valid_seal"
+        )
+        fakeRuleGrantPort.putRule(grant)
+
+        val outcome = routineExecutor.executeRule("rule_mismatch", 1000L)
+        assertTrue(outcome is RoutineExecutionOutcome.Denied)
+        val denied = outcome as RoutineExecutionOutcome.Denied
+        assertEquals("CAPABILITY_MISMATCH", denied.reasonCode)
+        assertTrue(fakeAuditLog.entries.any { it.decision == "DENIED" && it.actionSummary.contains("capability mismatch", ignoreCase = true) })
     }
 
     @Test

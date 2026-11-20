@@ -28,9 +28,11 @@ import com.nava.feature.automations.common.AutomationNotificationBridge
 import com.nava.feature.automations.common.CompletionNotificationRequest
 import com.nava.feature.automations.common.ForegroundNotificationSpec
 import com.nava.feature.automations.common.InteractiveNotificationRequest
+import com.nava.feature.automations.routine.AutomationWorkerRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -263,6 +265,13 @@ class BackgroundTaskContinuationTest {
         val outcome = manager.getOutcome("task_to_cancel")
         assertTrue(outcome is BackgroundTaskOutcome.Cancelled)
         assertEquals(listOf("task_to_cancel"), fakeScheduler.cancelledTasks)
+        assertNull(AutomationWorkerRegistry.getRequest("task_to_cancel"))
+
+        // Late execution attempt must return Cancelled without running or notifying
+        val lateOutcome = manager.executeNow(request, 2000L)
+        assertTrue(lateOutcome is BackgroundTaskOutcome.Cancelled)
+        assertEquals(0, fakeNotificationBridge.completionRequests.size)
+        assertEquals(0, fakeNotificationBridge.interactiveRequests.size)
     }
 
     @Test
