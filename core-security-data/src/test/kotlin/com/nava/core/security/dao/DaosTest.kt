@@ -6,6 +6,8 @@ import com.nava.core.security.testing.InMemoryRowStorage
 import com.nava.core.security.testing.InMemorySoftwareKeyProvider
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.DataProvenance
+import com.nava.domain.security.NoteStoragePort
+import com.nava.domain.security.StoredNote
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -356,5 +358,27 @@ class DaosTest {
         assertNull(cacheDao.findTemplate("en", "bad\u0000skeleton", nowEpochSec = 10L))
         assertNull(noteDao.findNote("bad\u0000note"))
         assertFalse(noteDao.deleteNote("bad\u0000note"))
+    }
+
+    @Test
+    fun encryptedNoteDaoConformsToDomainNoteStoragePort() = runTest {
+        val store = EncryptedSqliteStore(
+            storage = InMemoryRowStorage(),
+            keyProvider = InMemorySoftwareKeyProvider(),
+            dispatcher = UnconfinedTestDispatcher(testScheduler)
+        )
+        val port: NoteStoragePort = EncryptedNoteDao(store)
+
+        val stored = StoredNote(
+            noteId = "domain_note_1",
+            title = "Roadmap",
+            body = "Phase 4 contract verification",
+            updatedEpochSec = 500L
+        )
+        port.saveNote(stored)
+        assertEquals(stored, port.findNote("domain_note_1"))
+        assertEquals(listOf(stored), port.listNotes())
+        assertTrue(port.deleteNote("domain_note_1"))
+        assertNull(port.findNote("domain_note_1"))
     }
 }

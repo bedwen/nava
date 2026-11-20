@@ -5,30 +5,24 @@ import com.nava.core.security.storage.DecryptedRow
 import com.nava.core.security.storage.EncryptedSqliteStore
 import com.nava.core.security.storage.EncryptedTableSchema
 import com.nava.core.security.storage.StructuredPayloadCodec
+import com.nava.domain.security.NoteStoragePort
+import com.nava.domain.security.StoredNote
 
 /**
- * Standard encrypted local note persisted in [EncryptedSqliteStore] under `nava_db_master_key`.
+ * Source-compatible alias for the canonical `:domain` [StoredNote].
  */
-data class EncryptedNote(
-    val noteId: String,
-    val title: String,
-    val body: String,
-    val updatedEpochSec: Long
-) {
-    init {
-        require(noteId.isNotBlank()) { "EncryptedNote noteId must not be blank" }
-    }
-}
+typealias EncryptedNote = StoredNote
 
 /**
- * DAO for standard encrypted local notes over [EncryptedSqliteStore] (`encrypted_notes` table).
+ * DAO for standard encrypted local notes over [EncryptedSqliteStore] (`encrypted_notes` table),
+ * implementing the `:domain` [NoteStoragePort].
  */
 class EncryptedNoteDao(
     private val store: EncryptedSqliteStore
-) {
+) : NoteStoragePort {
 
     /** Inserts or updates [note] keyed by its `HMAC-SHA256` blind index. */
-    suspend fun saveNote(note: EncryptedNote) {
+    override suspend fun saveNote(note: EncryptedNote) {
         val lookupHmac = store.computeBlindIndex(DOMAIN_NOTE, note.noteId)
         val encoded = encodeNote(note)
         SecureMemory.withZeroizedBytes(encoded) { payload ->
@@ -43,7 +37,7 @@ class EncryptedNoteDao(
     }
 
     /** Finds and decrypts the note identified by [noteId], or returns null if absent. */
-    suspend fun findNote(noteId: String): EncryptedNote? {
+    override suspend fun findNote(noteId: String): EncryptedNote? {
         if (noteId.isBlank() || '\u0000' in noteId) return null
         val lookupHmac = store.computeBlindIndex(DOMAIN_NOTE, noteId)
         val row = store.findDecryptedByBlindIndex(
@@ -59,7 +53,7 @@ class EncryptedNoteDao(
     }
 
     /** Lists and decrypts all stored notes ordered by `updatedEpochSec DESC, noteId ASC`. */
-    suspend fun listNotes(): List<EncryptedNote> {
+    override suspend fun listNotes(): List<EncryptedNote> {
         val rows = store.listAllDecrypted(EncryptedTableSchema.TABLE_ENCRYPTED_NOTES)
         return try {
             val notes = ArrayList<EncryptedNote>(rows.size)
@@ -76,7 +70,7 @@ class EncryptedNoteDao(
     }
 
     /** Deletes the note identified by [noteId]; returns true if a note was removed. */
-    suspend fun deleteNote(noteId: String): Boolean {
+    override suspend fun deleteNote(noteId: String): Boolean {
         if (noteId.isBlank() || '\u0000' in noteId) return false
         val lookupHmac = store.computeBlindIndex(DOMAIN_NOTE, noteId)
         return store.deleteByBlindIndex(
