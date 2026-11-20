@@ -3,7 +3,10 @@ package com.nava.feature.automations.common
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import com.nava.domain.security.Gemma4InputSanitizer
 import java.io.ByteArrayOutputStream
+import java.text.Normalizer
+import java.util.Locale
 
 /**
  * Metadata descriptor for a file or subdirectory inside a user-granted SAF tree URI.
@@ -60,20 +63,105 @@ interface SafPlatformGateway {
     companion object {
         const val DEFAULT_MAX_READ_BYTES: Int = 512 * 1024
 
+        private const val MAX_PERCENT_DECODE_PASSES: Int = 4
+
         /**
          * Validates that [fileName] is a single traversal-free document name inside a SAF folder.
+         *
+         * Hardened against path traversal, homoglyphs, invisible/bidi controls, CRLF, null bytes,
+         * and multi-pass percent-encoded payloads matching OutboundChannelPolicy.
          */
         fun isSafeDocumentName(fileName: String): Boolean {
-            val trimmed = fileName.trim()
-            if (trimmed.isEmpty() || trimmed == "." || trimmed == "..") return false
-            if (trimmed.length > 255) return false
-            for (ch in trimmed) {
-                if (ch == '/' || ch == '\\' || ch == '\u0000' || ch == '\r' || ch == '\n' || ch.code < 32) {
+            if (fileName.isEmpty()) return false
+            if (containsRawControlOrBadChar(fileName)) return false
+
+            val nfkc = Normalizer.normalize(fileName, Normalizer.Form.NFKC)
+            val normalized = Gemma4InputSanitizer.stripInvisibleControls(nfkc).trim()
+            if (normalized.isEmpty() || normalized == "." || normalized == "..") return false
+            if (normalized.length > 255) return false
+            if (containsRawControlOrBadChar(normalized)) return false
+            if (".." in normalized) return false
+
+            var current = normalized
+            for (pass in 0 until MAX_PERCENT_DECODE_PASSES) {
+                val lower = current.lowercase(Locale.ROOT)
+                if (
+                    ".." in lower ||
+                    '/' in lower ||
+                    '\\' in lower ||
+                    "%5c" in lower ||
+                    "%2f" in lower ||
+                    "%00" in lower ||
+                    "%0a" in lower ||
+                    "%0d" in lower
+                ) {
+                    return false
+                }
+                val decoded = decodePercentOnce(current)
+                if (decoded == current) {
+                    break
+                }
+                if (containsRawControlOrBadChar(decoded) || ".." in decoded || '/' in decoded || '\\' in decoded) {
+                    return false
+                }
+                val decodedNfkc = Normalizer.normalize(decoded, Normalizer.Form.NFKC)
+                current = Gemma4InputSanitizer.stripInvisibleControls(decodedNfkc).trim()
+                if (containsRawControlOrBadChar(current) || ".." in current || '/' in current || '\\' in current) {
                     return false
                 }
             }
-            if (".." in trimmed) return false
-            return true
+
+            if (containsRawControlOrBadChar(current)) return false
+            val finalLower = current.lowercase(Locale.ROOT)
+            return !(
+                ".." in finalLower ||
+                '/' in finalLower ||
+                '\\' in finalLower ||
+                "%2e" in finalLower ||
+                "%5c" in finalLower ||
+                "%2f" in finalLower ||
+                "%00" in finalLower ||
+                "%0a" in finalLower ||
+                "%0d" in finalLower
+            )
+        }
+
+        private fun containsRawControlOrBadChar(s: String): Boolean {
+            for (ch in s) {
+                if (ch == '/' || ch == '\\' || ch == '\u0000' || ch == '\r' || ch == '\n' || ch.code < 32 || ch.code == 127) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private fun decodePercentOnce(input: String): String {
+            if ('%' !in input) return input
+            val sb = StringBuilder(input.length)
+            var i = 0
+            while (i < input.length) {
+                val ch = input[i]
+                if (ch == '%' && i + 2 < input.length) {
+                    val hi = hexDigit(input[i + 1])
+                    val lo = hexDigit(input[i + 2])
+                    if (hi >= 0 && lo >= 0) {
+                        val decodedByte = (hi shl 4) or lo
+                        sb.append(decodedByte.toChar())
+                        i += 3
+                        continue
+                    }
+                }
+                sb.append(ch)
+                i++
+            }
+            return sb.toString()
+        }
+
+        private fun hexDigit(ch: Char): Int = when (ch) {
+            in '0'..'9' -> ch - '0'
+            in 'a'..'f' -> ch - 'a' + 10
+            in 'A'..'F' -> ch - 'A' + 10
+            else -> -1
         }
     }
 }

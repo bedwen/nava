@@ -185,7 +185,8 @@ class AndroidAutomationIntentGateway(
         for (info in candidates) {
             val pkg = info.activityInfo?.packageName ?: continue
             if (!isValidPackageName(pkg)) continue
-            val label = info.loadLabel(pm)?.toString()?.trim()?.lowercase(Locale.ROOT) ?: continue
+            val label = info.loadLabel(pm).toString().trim().lowercase(Locale.ROOT)
+            if (label.isEmpty()) continue
             if (label == targetLower) {
                 return pkg
             }
