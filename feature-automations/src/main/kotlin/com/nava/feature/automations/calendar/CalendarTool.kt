@@ -392,6 +392,20 @@ class CalendarCreateTool(
             return failure
         }
         val title = Gemma4InputSanitizer.sanitize(rawTitle)
+        if (title.isBlank()) {
+            val failure = ToolArgumentReader.invalidArgumentsFailure("Event title is blank after sanitization")
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = ToolTargetIds.CALENDAR,
+                    actionSummary = "Invalid calendar create arguments: title blank after sanitization",
+                    provenance = worstProvenance,
+                    decision = failure.errorCode
+                )
+            )
+            return failure
+        }
 
         val startEpoch = ToolArgumentReader.getLong(arguments, "start_epoch_ms")?.value
             ?: ToolArgumentReader.getLong(arguments, "start_time")?.value
@@ -437,10 +451,15 @@ class CalendarCreateTool(
             calendarId = calendarId
         )
 
+        val baseTainted = Tainted.fromSystem(CalendarPlatformGateway.CALENDAR_PROVIDER_BASE_URI)
+        val taintedTargetUri: Tainted<String> = arguments.values.fold(baseTainted) { acc, arg ->
+            acc.combineWith(arg) { uri, _ -> uri }
+        }
+
         val firewallDecision = firewall.validateOutboundTarget(
             toolName = metadata.name,
             action = AutomationOutboundActions.ACTION_CALENDAR_PROVIDER,
-            uriOrTarget = Tainted.fromSystem(CalendarPlatformGateway.CALENDAR_PROVIDER_BASE_URI)
+            uriOrTarget = taintedTargetUri
         )
 
         when (firewallDecision) {
@@ -476,7 +495,9 @@ class CalendarCreateTool(
                     message = firewallDecision.message,
                     pendingToolName = metadata.name,
                     targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments)
+                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                    requiresBiometric = false,
+                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
                 )
             }
             is FirewallDecision.RequiresBiometric -> {
@@ -495,10 +516,38 @@ class CalendarCreateTool(
                     pendingToolName = metadata.name,
                     targetId = ToolTargetIds.CALENDAR,
                     canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true
+                    requiresBiometric = true,
+                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
                 )
             }
-            FirewallDecision.Authorized -> Unit
+            FirewallDecision.Authorized -> {
+                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
+                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                if (hasUntrusted || hasVault) {
+                    val worst = ToolArgumentReader.worstProvenance(arguments)
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar create requires confirmation due to untrusted/vault arguments",
+                            provenance = worst,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = UserMessage(
+                            key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                            args = listOf(MessageArg.ProvenanceBadge(worst))
+                        ),
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = false,
+                        hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+                    )
+                }
+            }
         }
 
         return when (val result = calendarGateway.createEvent(draft)) {
@@ -705,10 +754,15 @@ class CalendarModifyTool(
             return failure
         }
 
+        val baseTainted = Tainted.fromSystem(CalendarPlatformGateway.CALENDAR_PROVIDER_BASE_URI)
+        val taintedTargetUri: Tainted<String> = arguments.values.fold(baseTainted) { acc, arg ->
+            acc.combineWith(arg) { uri, _ -> uri }
+        }
+
         val firewallDecision = firewall.validateOutboundTarget(
             toolName = metadata.name,
             action = AutomationOutboundActions.ACTION_CALENDAR_PROVIDER,
-            uriOrTarget = Tainted.fromSystem(CalendarPlatformGateway.CALENDAR_PROVIDER_BASE_URI)
+            uriOrTarget = taintedTargetUri
         )
 
         when (firewallDecision) {
@@ -744,7 +798,9 @@ class CalendarModifyTool(
                     message = firewallDecision.message,
                     pendingToolName = metadata.name,
                     targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments)
+                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                    requiresBiometric = false,
+                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
                 )
             }
             is FirewallDecision.RequiresBiometric -> {
@@ -763,10 +819,38 @@ class CalendarModifyTool(
                     pendingToolName = metadata.name,
                     targetId = ToolTargetIds.CALENDAR,
                     canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true
+                    requiresBiometric = true,
+                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
                 )
             }
-            FirewallDecision.Authorized -> Unit
+            FirewallDecision.Authorized -> {
+                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
+                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                if (hasUntrusted || hasVault) {
+                    val worst = ToolArgumentReader.worstProvenance(arguments)
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar modify requires confirmation due to untrusted/vault arguments",
+                            provenance = worst,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = UserMessage(
+                            key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                            args = listOf(MessageArg.ProvenanceBadge(worst))
+                        ),
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = false,
+                        hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+                    )
+                }
+            }
         }
 
         return if (operation == "delete") {

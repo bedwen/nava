@@ -6,6 +6,7 @@ import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.AuditLogPort
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.FirewallDecision
+import com.nava.domain.security.Gemma4InputSanitizer
 import com.nava.domain.security.SecurityFirewallPort
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.domain.security.Tainted
@@ -144,7 +145,11 @@ sealed class SafDirectoryTool(
 
             val rawFileName = fileNameTainted?.value?.trim()
             val targetUriString = if (!rawFileName.isNullOrEmpty()) "$rawTreeUri/$rawFileName" else rawTreeUri
-            val taintedTargetUri: Tainted<String> = treeUriTainted.map { targetUriString }
+            val taintedTargetUri: Tainted<String> = if (fileNameTainted != null) {
+                treeUriTainted.combineWith(fileNameTainted) { _, _ -> targetUriString }
+            } else {
+                treeUriTainted.map { targetUriString }
+            }
 
             if (!rawFileName.isNullOrEmpty() && !SafPlatformGateway.isSafeDocumentName(rawFileName)) {
                 recordSafAudit(
@@ -215,7 +220,29 @@ sealed class SafDirectoryTool(
                 }
 
                 FirewallDecision.Authorized -> {
-                    // Safe to proceed
+                    val hasUntrusted = treeUriTainted.isUntrusted || fileNameTainted?.isUntrusted == true
+                    val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                    if (hasUntrusted || hasVault) {
+                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "User confirmation required for SAF read target: $targetUriString",
+                            provenance = worst,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                args = listOf(MessageArg.ProvenanceBadge(worst))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = true
+                        )
+                    }
                 }
             }
 
@@ -241,7 +268,7 @@ sealed class SafDirectoryTool(
                             ),
                             outputValues = mapOf(
                                 "count" to entries.size.toString(),
-                                "documents" to entries.joinToString(",") { it.displayName }
+                                "documents" to entries.joinToString(",") { Gemma4InputSanitizer.sanitize(it.displayName) }
                             ),
                             outputProvenance = DataProvenance.UNTRUSTED_EXTERNAL
                         )
@@ -285,7 +312,8 @@ sealed class SafDirectoryTool(
             return when (val readResult = safGateway.readDocument(rawTreeUri, rawFileName)) {
                 is SafGatewayResult.Success -> {
                     val bytes = readResult.value
-                    val contentString = bytes.toString(Charsets.UTF_8)
+                    val contentString = Gemma4InputSanitizer.sanitize(bytes.toString(Charsets.UTF_8))
+                    val sanitizedFileName = Gemma4InputSanitizer.sanitize(rawFileName)
                     recordSafAudit(
                         timestampMs = nowMs,
                         treeUri = rawTreeUri,
@@ -296,10 +324,10 @@ sealed class SafDirectoryTool(
                     ToolResult.Success(
                         message = UserMessage(
                             key = MessageKey.ACTION_SAF_FILE_READ,
-                            args = listOf(MessageArg.Text(rawFileName))
+                            args = listOf(MessageArg.Text(sanitizedFileName))
                         ),
                         outputValues = mapOf(
-                            FIELD_FILE_NAME to rawFileName,
+                            FIELD_FILE_NAME to sanitizedFileName,
                             FIELD_CONTENT to contentString,
                             "size_bytes" to bytes.size.toString()
                         ),
@@ -460,7 +488,7 @@ sealed class SafDirectoryTool(
             }
 
             val targetDocUriString = "$rawTreeUri/$rawFileName"
-            val taintedTargetDocUri: Tainted<String> = treeUriTainted.map { targetDocUriString }
+            val taintedTargetDocUri: Tainted<String> = treeUriTainted.combineWith(fileNameTainted) { _, _ -> targetDocUriString }
 
             val firewallDecision = firewall.validateOutboundTarget(
                 toolName = metadata.name,
@@ -707,6 +735,93 @@ sealed class SafDirectoryTool(
                     ),
                     errorCode = ToolArgumentReader.ERROR_SAF_GRANT_MISSING
                 )
+            }
+
+            val targetDocUriString = "$rawTreeUri/$rawFileName"
+            val taintedTargetDocUri: Tainted<String> = treeUriTainted.combineWith(fileNameTainted) { _, _ -> targetDocUriString }
+
+            val firewallDecision = firewall.validateOutboundTarget(
+                toolName = metadata.name,
+                action = AutomationOutboundActions.ACTION_SAF_WRITE,
+                uriOrTarget = taintedTargetDocUri
+            )
+
+            when (firewallDecision) {
+                is FirewallDecision.Denied -> {
+                    recordSafAudit(
+                        timestampMs = nowMs,
+                        treeUri = rawTreeUri,
+                        actionSummary = "Denied SAF delete target: $targetDocUriString",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = firewallDecision.reasonCode
+                    )
+                    return ToolArgumentReader.securityFailure(
+                        reasonCode = firewallDecision.reasonCode,
+                        message = firewallDecision.message
+                    )
+                }
+
+                is FirewallDecision.RequiresBiometric -> {
+                    recordSafAudit(
+                        timestampMs = nowMs,
+                        treeUri = rawTreeUri,
+                        actionSummary = "Biometric confirmation required for SAF delete target: $targetDocUriString",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "BIOMETRIC_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true,
+                        hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
+                    )
+                }
+
+                is FirewallDecision.RequiresConfirmation -> {
+                    recordSafAudit(
+                        timestampMs = nowMs,
+                        treeUri = rawTreeUri,
+                        actionSummary = "User confirmation required for SAF delete target: $targetDocUriString",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "CONFIRMATION_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = false,
+                        hasUntrustedHighRiskSlot = true
+                    )
+                }
+
+                FirewallDecision.Authorized -> {
+                    val hasUntrusted = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted || ToolArgumentReader.hasUntrustedArgument(arguments)
+                    val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                    if (hasUntrusted || hasVault) {
+                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "Confirmation required for SAF delete with untrusted/vault arguments: $targetDocUriString (worstProvenance=$worst)",
+                            provenance = worst,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                args = listOf(MessageArg.ProvenanceBadge(worst))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
+                        )
+                    }
+                }
             }
 
             return when (val deleteResult = safGateway.deleteDocument(rawTreeUri, rawFileName)) {
