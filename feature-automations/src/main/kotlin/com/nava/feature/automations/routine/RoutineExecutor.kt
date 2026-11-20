@@ -241,7 +241,8 @@ class RoutineExecutor(
 
         // Execute static actions unattended with DataProvenance.SYSTEM
         val completedSteps = ArrayList<ToolResult.Success>(resolvedTools.size)
-        for ((action, tool) in resolvedTools) {
+        for ((index, step) in resolvedTools.withIndex()) {
+            val (action, tool) = step
             val arguments = LinkedHashMap<String, Tainted<SlotValueAst>>(action.staticArguments.size)
             for ((argName, argVal) in action.staticArguments) {
                 val field = tool.metadata.fieldByName(argName)
@@ -293,7 +294,8 @@ class RoutineExecutor(
                         grant = grant,
                         requiresBiometric = result.requiresBiometric || action.requiresBiometric || action.toolName in AutomationToolNames.VAULT_TOOLS,
                         nowEpochMs = nowEpochMs,
-                        completedSteps = completedSteps
+                        completedSteps = completedSteps,
+                        pendingActions = grant.staticActions.drop(index)
                     )
                 }
 
@@ -366,11 +368,12 @@ class RoutineExecutor(
         grant: RuleCapabilityGrant,
         requiresBiometric: Boolean,
         nowEpochMs: Long,
-        completedSteps: List<ToolResult.Success>
+        completedSteps: List<ToolResult.Success>,
+        pendingActions: List<com.nava.domain.security.RuleActionSpec> = grant.staticActions
     ): RoutineExecutionOutcome.EscalatedToInteractive {
         val effectiveBiometric = requiresBiometric ||
-            grant.staticActions.any { it.requiresBiometric || it.toolName in AutomationToolNames.VAULT_TOOLS }
-        val pendingToolNames = grant.staticActions.map { it.toolName }
+            pendingActions.any { it.requiresBiometric || it.toolName in AutomationToolNames.VAULT_TOOLS }
+        val pendingToolNames = pendingActions.map { it.toolName }
         val message = UserMessage(
             key = if (effectiveBiometric) {
                 MessageKey.ROUTINE_ESCALATED_BIOMETRIC

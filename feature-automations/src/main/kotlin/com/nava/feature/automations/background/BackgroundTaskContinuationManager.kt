@@ -19,7 +19,9 @@ import com.nava.feature.automations.common.CompletionNotificationRequest
 import com.nava.feature.automations.common.InteractiveNotificationRequest
 import com.nava.feature.automations.common.ToolTargetIds
 import com.nava.feature.automations.routine.AutomationWorkerRegistry
+import java.util.LinkedHashSet
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 
 /**
  * Implementation of [BackgroundTaskContinuationPort] executing user-initiated long-running tasks
@@ -40,16 +42,41 @@ class BackgroundTaskContinuationManager(
     private val notificationBridge: AutomationNotificationBridge,
     private val scheduler: BackgroundTaskWorkScheduler,
     private val modelProvisioner: ModelProvisionerPort? = null,
-    private val modelImportHandler: (suspend (BackgroundTaskRequest.ModelImportContinuation) -> Boolean)? = null
+    private val modelImportHandler: (suspend (BackgroundTaskRequest.ModelImportContinuation) -> Boolean)? = null,
+    private val maxRetainedTasks: Int = MAX_RETAINED_TASKS
 ) : BackgroundTaskContinuationPort {
 
     private val taskRequests = ConcurrentHashMap<String, BackgroundTaskRequest>()
     private val taskStatuses = ConcurrentHashMap<String, BackgroundTaskStatus>()
     private val taskOutcomes = ConcurrentHashMap<String, BackgroundTaskOutcome>()
+    private val taskOrder = LinkedHashSet<String>()
+
+    private fun trimRetainedTasksLocked() {
+        if (taskStatuses.size <= maxRetainedTasks) return
+        val iterator = taskOrder.iterator()
+        while (iterator.hasNext() && taskStatuses.size > maxRetainedTasks) {
+            val taskId = iterator.next()
+            val status = taskStatuses[taskId]
+            if (status == BackgroundTaskStatus.COMPLETED ||
+                status == BackgroundTaskStatus.FAILED ||
+                status == BackgroundTaskStatus.CANCELLED
+            ) {
+                iterator.remove()
+                taskStatuses.remove(taskId)
+                taskRequests.remove(taskId)
+                taskOutcomes.remove(taskId)
+            }
+        }
+    }
 
     override suspend fun enqueue(request: BackgroundTaskRequest): String {
-        taskRequests[request.taskId] = request
-        taskStatuses[request.taskId] = BackgroundTaskStatus.ENQUEUED
+        synchronized(taskStatuses) {
+            taskRequests[request.taskId] = request
+            taskStatuses[request.taskId] = BackgroundTaskStatus.ENQUEUED
+            taskOrder.remove(request.taskId)
+            taskOrder.add(request.taskId)
+            trimRetainedTasksLocked()
+        }
         AutomationWorkerRegistry.registerRequest(request)
         scheduler.schedule(request)
         return request.taskId
@@ -61,6 +88,7 @@ class BackgroundTaskContinuationManager(
     ): BackgroundTaskOutcome {
         synchronized(taskStatuses) {
             if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                AutomationWorkerRegistry.unregisterRequest(request.taskId)
                 return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
                     ?: BackgroundTaskOutcome.Cancelled(
                         taskId = request.taskId,
@@ -72,6 +100,8 @@ class BackgroundTaskContinuationManager(
             }
             taskRequests[request.taskId] = request
             taskStatuses[request.taskId] = BackgroundTaskStatus.RUNNING
+            taskOrder.remove(request.taskId)
+            taskOrder.add(request.taskId)
         }
 
         val outcome: BackgroundTaskOutcome = when (request) {
@@ -81,6 +111,7 @@ class BackgroundTaskContinuationManager(
 
         synchronized(taskStatuses) {
             if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                AutomationWorkerRegistry.unregisterRequest(request.taskId)
                 return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
                     ?: BackgroundTaskOutcome.Cancelled(
                         taskId = request.taskId,
@@ -92,7 +123,16 @@ class BackgroundTaskContinuationManager(
             }
             taskOutcomes[request.taskId] = outcome
             taskStatuses[request.taskId] = outcome.status
+            trimRetainedTasksLocked()
         }
+
+        if (outcome is BackgroundTaskOutcome.Completed ||
+            outcome is BackgroundTaskOutcome.Failed ||
+            outcome is BackgroundTaskOutcome.Cancelled
+        ) {
+            AutomationWorkerRegistry.unregisterRequest(request.taskId)
+        }
+
         return outcome
     }
 
@@ -117,6 +157,9 @@ class BackgroundTaskContinuationManager(
         synchronized(taskStatuses) {
             taskStatuses[taskId] = BackgroundTaskStatus.CANCELLED
             taskOutcomes[taskId] = cancelledOutcome
+            taskOrder.remove(taskId)
+            taskOrder.add(taskId)
+            trimRetainedTasksLocked()
         }
         auditLog.record(
             AuditLogEntry(
@@ -138,17 +181,47 @@ class BackgroundTaskContinuationManager(
         request: BackgroundTaskRequest.PlanContinuation,
         nowEpochMs: Long
     ): BackgroundTaskOutcome {
-        val results = executePlanUseCase(
-            plan = request.plan,
-            capabilityToken = request.capabilityToken,
-            targetId = request.targetId,
-            languageTag = request.languageTag,
-            nowEpochMs = nowEpochMs,
-            confirmedStepIndices = request.confirmedStepIndices,
-            biometricApprovedStepIndices = request.biometricApprovedStepIndices,
-            targetIdsByStep = request.targetIdsByStep,
-            startFromOrderIndex = request.startFromOrderIndex
-        )
+        val results = try {
+            executePlanUseCase(
+                plan = request.plan,
+                capabilityToken = request.capabilityToken,
+                targetId = request.targetId,
+                languageTag = request.languageTag,
+                nowEpochMs = nowEpochMs,
+                confirmedStepIndices = request.confirmedStepIndices,
+                biometricApprovedStepIndices = request.biometricApprovedStepIndices,
+                targetIdsByStep = request.targetIdsByStep,
+                startFromOrderIndex = request.startFromOrderIndex
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SecurityException) {
+            val errorCode = e.message ?: "SECURITY_EXCEPTION"
+            synchronized(taskStatuses) {
+                taskStatuses[request.taskId] = BackgroundTaskStatus.FAILED
+            }
+            AutomationWorkerRegistry.unregisterRequest(request.taskId)
+            val outcome = BackgroundTaskOutcome.Failed(
+                taskId = request.taskId,
+                errorCode = errorCode,
+                message = UserMessage(
+                    key = MessageKey.BACKGROUND_TASK_FAILED,
+                    args = listOf(MessageArg.Text(errorCode))
+                ),
+                isSecurityViolation = true
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowEpochMs,
+                    toolName = "background_task_manager",
+                    targetId = ToolTargetIds.BACKGROUND_TASKS,
+                    actionSummary = "Background task ${request.taskId} security failure: $errorCode",
+                    provenance = DataProvenance.SYSTEM,
+                    decision = errorCode
+                )
+            )
+            return outcome
+        }
 
         val completedSteps = ArrayList<ToolResult.Success>()
         val combinedOutputs = LinkedHashMap<String, String>()
@@ -163,6 +236,7 @@ class BackgroundTaskContinuationManager(
                 is ToolResult.ConfirmationRequired -> {
                     synchronized(taskStatuses) {
                         if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                            AutomationWorkerRegistry.unregisterRequest(request.taskId)
                             return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
                                 ?: BackgroundTaskOutcome.Cancelled(
                                     taskId = request.taskId,
@@ -232,6 +306,7 @@ class BackgroundTaskContinuationManager(
         // All steps succeeded safely (Auto)
         synchronized(taskStatuses) {
             if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                AutomationWorkerRegistry.unregisterRequest(request.taskId)
                 return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
                     ?: BackgroundTaskOutcome.Cancelled(
                         taskId = request.taskId,
@@ -279,18 +354,46 @@ class BackgroundTaskContinuationManager(
         request: BackgroundTaskRequest.ModelImportContinuation,
         nowEpochMs: Long
     ): BackgroundTaskOutcome {
+        val isSafUri = request.sourceUri.startsWith("content://")
+        if (modelImportHandler == null && isSafUri) {
+            val errorCode = "MODEL_IMPORT_HANDLER_MISSING"
+            val outcome = BackgroundTaskOutcome.Failed(
+                taskId = request.taskId,
+                errorCode = errorCode,
+                message = UserMessage(
+                    key = MessageKey.BACKGROUND_TASK_FAILED,
+                    args = listOf(MessageArg.Text(errorCode))
+                )
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowEpochMs,
+                    toolName = "background_task_manager",
+                    targetId = ToolTargetIds.BACKGROUND_TASKS,
+                    actionSummary = "Model import continuation ${request.taskId} failed: $errorCode",
+                    provenance = DataProvenance.SYSTEM,
+                    decision = errorCode
+                )
+            )
+            return outcome
+        }
+
         val importSuccess: Boolean = when {
             modelImportHandler != null -> {
                 try {
                     modelImportHandler.invoke(request)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     false
                 }
             }
 
-            modelProvisioner != null -> {
+            modelProvisioner != null && !isSafUri -> {
                 try {
                     modelProvisioner.verifyFileIntegrity(request.sourceUri, request.expectedSha256Hex)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     false
                 }
@@ -302,6 +405,7 @@ class BackgroundTaskContinuationManager(
         if (importSuccess) {
             synchronized(taskStatuses) {
                 if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                    AutomationWorkerRegistry.unregisterRequest(request.taskId)
                     return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
                         ?: BackgroundTaskOutcome.Cancelled(
                             taskId = request.taskId,
@@ -371,5 +475,9 @@ class BackgroundTaskContinuationManager(
 
             return outcome
         }
+    }
+
+    companion object {
+        const val MAX_RETAINED_TASKS: Int = 200
     }
 }

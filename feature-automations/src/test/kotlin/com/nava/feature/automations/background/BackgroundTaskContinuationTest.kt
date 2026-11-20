@@ -334,7 +334,7 @@ class BackgroundTaskContinuationTest {
 
         val request = BackgroundTaskRequest.ModelImportContinuation(
             taskId = "task_no_prov",
-            sourceUri = "content://saf/model.litertlm",
+            sourceUri = "/data/local/models/model.litertlm",
             expectedModelId = "gemma-4-e2b",
             expectedSha256Hex = "valid_sha256",
             languageTag = "en",
@@ -345,6 +345,243 @@ class BackgroundTaskContinuationTest {
         assertTrue(outcome is BackgroundTaskOutcome.Failed)
         val failed = outcome as BackgroundTaskOutcome.Failed
         assertEquals("PROVISIONER_UNAVAILABLE", failed.errorCode)
+    }
+
+    @Test
+    fun modelImportContinuationFailsWhenContentUriLacksImportHandler() = runBlocking {
+        val managerWithoutHandler = BackgroundTaskContinuationManager(
+            executePlanUseCase = executePlanUseCase,
+            auditLog = fakeAuditLog,
+            notificationBridge = fakeNotificationBridge,
+            scheduler = fakeScheduler,
+            modelProvisioner = null,
+            modelImportHandler = null
+        )
+
+        val request = BackgroundTaskRequest.ModelImportContinuation(
+            taskId = "task_content_no_handler",
+            sourceUri = "content://saf/model.litertlm",
+            expectedModelId = "gemma-4-e2b",
+            expectedSha256Hex = "valid_sha256",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+
+        val outcome = managerWithoutHandler.executeNow(request, 2000L)
+        assertTrue(outcome is BackgroundTaskOutcome.Failed)
+        val failed = outcome as BackgroundTaskOutcome.Failed
+        assertEquals("MODEL_IMPORT_HANDLER_MISSING", failed.errorCode)
+        assertEquals(BackgroundTaskStatus.FAILED, managerWithoutHandler.getStatus("task_content_no_handler"))
+        assertEquals(1, fakeAuditLog.entries.size)
+        assertEquals("MODEL_IMPORT_HANDLER_MISSING", fakeAuditLog.entries.first().decision)
+        assertNull(AutomationWorkerRegistry.getRequest("task_content_no_handler"))
+    }
+
+    @Test(expected = kotlinx.coroutines.CancellationException::class)
+    fun planContinuationPropagatesCancellationException() {
+        runBlocking {
+            toolRegistry.register(
+                FakePlanTool(
+                    name = "throwing_tool",
+                    exceptionToThrow = kotlinx.coroutines.CancellationException("Worker cancelled")
+                )
+            )
+            val plan = PlanAst(
+                planId = "plan_cancel_prop",
+                calls = listOf(ToolCallAst("throwing_tool", emptyMap(), 0))
+            )
+            val token = CapabilityToken.mint(
+                tokenId = "tok_prop",
+                requestId = "req_prop",
+                allowedTools = setOf("throwing_tool"),
+                mintProvenance = DataProvenance.USER_UTTERANCE,
+                issuedAtEpochMs = 1000L,
+                expiresAtEpochMs = 60_000L,
+                maxToolCalls = 5
+            )
+            val request = BackgroundTaskRequest.PlanContinuation(
+                taskId = "task_cancel_prop",
+                plan = plan,
+                capabilityToken = token,
+                targetId = "nava.notes",
+                languageTag = "en",
+                enqueuedAtEpochMs = 1000L
+            )
+            manager.executeNow(request, 2000L)
+        }
+    }
+
+    @Test(expected = kotlinx.coroutines.CancellationException::class)
+    fun modelImportContinuationPropagatesCancellationException() {
+        runBlocking {
+            val managerWithCancellingHandler = BackgroundTaskContinuationManager(
+                executePlanUseCase = executePlanUseCase,
+                auditLog = fakeAuditLog,
+                notificationBridge = fakeNotificationBridge,
+                scheduler = fakeScheduler,
+                modelImportHandler = { throw kotlinx.coroutines.CancellationException("Import cancelled") }
+            )
+            val request = BackgroundTaskRequest.ModelImportContinuation(
+                taskId = "task_import_cancel",
+                sourceUri = "content://saf/model.litertlm",
+                expectedModelId = "gemma-4-e2b",
+                expectedSha256Hex = "valid_sha256",
+                languageTag = "en",
+                enqueuedAtEpochMs = 1000L
+            )
+            managerWithCancellingHandler.executeNow(request, 2000L)
+        }
+    }
+
+    @Test
+    fun planContinuationCatchesSecurityExceptionAndRecordsViolation() = runBlocking {
+        toolRegistry.register(
+            FakePlanTool(
+                name = "sec_tool",
+                result = ToolResult.Success(UserMessage(MessageKey.ACTION_NOTE_SAVED), emptyMap())
+            )
+        )
+        val plan = PlanAst(
+            planId = "plan_sec",
+            calls = listOf(ToolCallAst("sec_tool", emptyMap(), 0))
+        )
+        val expiredToken = CapabilityToken.mint(
+            tokenId = "tok_expired",
+            requestId = "req_sec",
+            allowedTools = setOf("sec_tool"),
+            mintProvenance = DataProvenance.USER_UTTERANCE,
+            issuedAtEpochMs = 1000L,
+            expiresAtEpochMs = 1500L,
+            maxToolCalls = 5
+        )
+        val request = BackgroundTaskRequest.PlanContinuation(
+            taskId = "task_sec_fail",
+            plan = plan,
+            capabilityToken = expiredToken,
+            targetId = "nava.notes",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+
+        manager.enqueue(request)
+        assertEquals(request, AutomationWorkerRegistry.getRequest("task_sec_fail"))
+
+        val outcome = manager.executeNow(request, 2000L)
+        assertTrue(outcome is BackgroundTaskOutcome.Failed)
+        val failed = outcome as BackgroundTaskOutcome.Failed
+        assertTrue("isSecurityViolation must be true", failed.isSecurityViolation)
+        assertEquals(BackgroundTaskStatus.FAILED, manager.getStatus("task_sec_fail"))
+        assertNull("AutomationWorkerRegistry must unregister request on security failure", AutomationWorkerRegistry.getRequest("task_sec_fail"))
+        assertEquals(1, fakeAuditLog.entries.size)
+        assertTrue(fakeAuditLog.entries.first().actionSummary.contains("security failure"))
+    }
+
+    @Test
+    fun terminalOutcomesUnregisterFromAutomationWorkerRegistry() = runBlocking {
+        toolRegistry.register(
+            FakePlanTool(
+                name = "tool_terminal",
+                result = ToolResult.Success(UserMessage(MessageKey.ACTION_NOTE_SAVED), emptyMap())
+            )
+        )
+        val plan = PlanAst(
+            planId = "plan_term",
+            calls = listOf(ToolCallAst("tool_terminal", emptyMap(), 0))
+        )
+        val token = CapabilityToken.mint(
+            tokenId = "tok_term",
+            requestId = "req_term",
+            allowedTools = setOf("tool_terminal"),
+            mintProvenance = DataProvenance.USER_UTTERANCE,
+            issuedAtEpochMs = 1000L,
+            expiresAtEpochMs = 60_000L,
+            maxToolCalls = 5
+        )
+
+        // 1. Completed
+        val completedReq = BackgroundTaskRequest.PlanContinuation(
+            taskId = "task_complete",
+            plan = plan,
+            capabilityToken = token,
+            targetId = "nava.notes",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+        manager.enqueue(completedReq)
+        assertEquals(completedReq, AutomationWorkerRegistry.getRequest("task_complete"))
+        val completedOutcome = manager.executeNow(completedReq, 2000L)
+        assertTrue(completedOutcome is BackgroundTaskOutcome.Completed)
+        assertNull("Registry must be unregistered on Completed", AutomationWorkerRegistry.getRequest("task_complete"))
+
+        // 2. Failed
+        val failingReq = BackgroundTaskRequest.ModelImportContinuation(
+            taskId = "task_fail",
+            sourceUri = "/data/local/models/model.litertlm",
+            expectedModelId = "gemma-4-e2b",
+            expectedSha256Hex = "bad_sha",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+        manager.enqueue(failingReq)
+        assertEquals(failingReq, AutomationWorkerRegistry.getRequest("task_fail"))
+        val failedOutcome = manager.executeNow(failingReq, 2000L)
+        assertTrue(failedOutcome is BackgroundTaskOutcome.Failed)
+        assertNull("Registry must be unregistered on Failed", AutomationWorkerRegistry.getRequest("task_fail"))
+
+        // 3. Cancelled
+        val cancelledReq = BackgroundTaskRequest.PlanContinuation(
+            taskId = "task_cancel_reg",
+            plan = plan,
+            capabilityToken = token,
+            targetId = "nava.notes",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+        manager.enqueue(cancelledReq)
+        assertEquals(cancelledReq, AutomationWorkerRegistry.getRequest("task_cancel_reg"))
+        manager.cancel("task_cancel_reg")
+        assertNull("Registry must be unregistered on Cancelled", AutomationWorkerRegistry.getRequest("task_cancel_reg"))
+    }
+
+    @Test
+    fun boundedRetentionCapEvictsOldestTerminalTasksOnly() = runBlocking {
+        val boundedManager = BackgroundTaskContinuationManager(
+            executePlanUseCase = executePlanUseCase,
+            auditLog = fakeAuditLog,
+            notificationBridge = fakeNotificationBridge,
+            scheduler = fakeScheduler,
+            modelImportHandler = { true },
+            maxRetainedTasks = 2
+        )
+
+        fun makeModelReq(id: String) = BackgroundTaskRequest.ModelImportContinuation(
+            taskId = id,
+            sourceUri = "content://saf/model.litertlm",
+            expectedModelId = "gemma-4-e2b",
+            expectedSha256Hex = "valid_sha256",
+            languageTag = "en",
+            enqueuedAtEpochMs = 1000L
+        )
+
+        val req1 = makeModelReq("task_1")
+        boundedManager.enqueue(req1)
+        boundedManager.executeNow(req1, 1000L)
+        assertEquals(BackgroundTaskStatus.COMPLETED, boundedManager.getStatus("task_1"))
+
+        val req2 = makeModelReq("task_2")
+        boundedManager.enqueue(req2)
+        assertEquals(BackgroundTaskStatus.ENQUEUED, boundedManager.getStatus("task_2"))
+
+        val req3 = makeModelReq("task_3")
+        boundedManager.enqueue(req3)
+        boundedManager.executeNow(req3, 3000L)
+
+        assertNull("task_1 should be evicted", boundedManager.getStatus("task_1"))
+        assertNull("task_1 outcome should be evicted", boundedManager.getOutcome("task_1"))
+        assertNull("task_1 request should be evicted", boundedManager.getRequest("task_1"))
+
+        assertEquals(BackgroundTaskStatus.ENQUEUED, boundedManager.getStatus("task_2"))
+        assertEquals(BackgroundTaskStatus.COMPLETED, boundedManager.getStatus("task_3"))
     }
 }
 
@@ -363,7 +600,8 @@ class FakeBackgroundTaskScheduler : BackgroundTaskWorkScheduler {
 
 class FakePlanTool(
     name: String,
-    private val result: ToolResult
+    private val result: ToolResult = ToolResult.Success(UserMessage(MessageKey.ACTION_NOTE_SAVED), emptyMap()),
+    private val exceptionToThrow: Throwable? = null
 ) : NavaTool {
     override val metadata: ToolMetadata = ToolMetadata(
         name = name,
@@ -377,7 +615,10 @@ class FakePlanTool(
     override suspend fun execute(
         context: ToolExecutionContext,
         arguments: Map<String, Tainted<SlotValueAst>>
-    ): ToolResult = result
+    ): ToolResult {
+        if (exceptionToThrow != null) throw exceptionToThrow
+        return result
+    }
 }
 
 class FakeSecurityFirewall : SecurityFirewallPort {

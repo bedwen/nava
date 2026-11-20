@@ -234,6 +234,21 @@ class NavaNotificationTestSuite {
         assertEquals(DataProvenance.UNTRUSTED_EXTERNAL, stored.body.provenance)
     }
 
+    @Test(expected = kotlinx.coroutines.CancellationException::class)
+    fun ingestionFilterPropagatesCancellationException() {
+        runBlocking {
+            fakeEvaluator.throwCancellation = true
+            val filter = NotificationIngestionFilter(fakeEvaluator, inbox)
+            filter.onPosted(
+                notificationKey = "key_cancel",
+                packageName = "com.test.app",
+                postedAtEpochMs = 1000L,
+                channelId = null,
+                lazyContentExtractor = { "Title" to "Body" }
+            )
+        }
+    }
+
     // ==========================================
     // 3. NotificationServiceBinding
     // ==========================================
@@ -434,6 +449,7 @@ class NavaNotificationTestSuite {
 
 class FakePermissionEvaluator : PermissionEvaluatorPort {
     private val capabilities = mutableMapOf<String, ConfirmationLevel>()
+    var throwCancellation: Boolean = false
 
     fun setCapability(packageName: String, level: ConfirmationLevel) {
         val targetId = ToolTargetIds.forPackage(packageName)
@@ -444,6 +460,9 @@ class FakePermissionEvaluator : PermissionEvaluatorPort {
         targetId: String,
         capability: AtomicCapability
     ): ConfirmationLevel {
+        if (throwCancellation) {
+            throw kotlinx.coroutines.CancellationException("Permission check cancelled")
+        }
         if (capability == AtomicCapability.NOTIFICATION_READ) {
             return capabilities[targetId] ?: ConfirmationLevel.DISABLED
         }
