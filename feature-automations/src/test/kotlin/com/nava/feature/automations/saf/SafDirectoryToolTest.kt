@@ -410,4 +410,95 @@ class SafDirectoryToolTest {
             names
         )
     }
+
+    @Test
+    fun approvedStage2SafCallsExecuteCleanlyWhenUserConfirmed() = runBlocking {
+        val gateway = FakeSafGateway().apply {
+            grantedTrees[treeUri] = true
+            documents[treeUri] = mutableMapOf(
+                "doc.txt" to "sample text".toByteArray(Charsets.UTF_8)
+            )
+        }
+        val firewall = FakeFirewall().apply { decision = FirewallDecision.Authorized }
+        val auditLog = FakeAuditLog()
+        val readTool = SafReadTool(gateway, firewall, auditLog)
+        val writeTool = SafWriteTool(gateway, firewall, auditLog)
+        val deleteTool = SafDeleteTool(gateway, firewall, auditLog)
+        val targetId = ToolTargetIds.forSafTree(treeUri)
+
+        val untrustedWriteArgs = mapOf(
+            "tree_uri" to Tainted.fromUserUtterance(SlotValueAst.StringValue(treeUri)),
+            "file_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("stage2.txt")),
+            "content" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("Tainted payload from web"),
+                SensitiveSlotKind.TEXT_BODY,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+
+        // 1. Unconfirmed write escalates to ConfirmationRequired
+        val unconfWrite = writeTool.execute(createInteractiveContext(AutomationToolNames.SAF_WRITE, targetId), untrustedWriteArgs)
+        assertTrue(unconfWrite is ToolResult.ConfirmationRequired)
+
+        // 2. Confirmed write succeeds cleanly
+        val confirmedContext = createInteractiveContext(AutomationToolNames.SAF_WRITE, targetId).copy(isUserConfirmed = true)
+        val confWriteRes = writeTool.execute(confirmedContext, untrustedWriteArgs)
+        assertTrue(confWriteRes is ToolResult.Success)
+        assertEquals("Tainted payload from web", gateway.documents[treeUri]?.get("stage2.txt")?.toString(Charsets.UTF_8))
+
+        // 3. Unconfirmed delete with untrusted args escalates
+        val untrustedDeleteArgs = mapOf(
+            "tree_uri" to Tainted.fromUserUtterance(SlotValueAst.StringValue(treeUri)),
+            "file_name" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("stage2.txt"),
+                SensitiveSlotKind.TEXT_BODY,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+        val unconfDelete = deleteTool.execute(createInteractiveContext(AutomationToolNames.SAF_DELETE, targetId), untrustedDeleteArgs)
+        assertTrue(unconfDelete is ToolResult.ConfirmationRequired)
+
+        // Confirmed delete succeeds
+        val confDeleteRes = deleteTool.execute(confirmedContext, untrustedDeleteArgs)
+        assertTrue(confDeleteRes is ToolResult.Success)
+        assertFalse(gateway.documents[treeUri]!!.containsKey("stage2.txt"))
+
+        // 4. Denied firewall decision hard-blocks unconditionally even when confirmed
+        firewall.decision = FirewallDecision.Denied(
+            message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+            reasonCode = "SAF_ACCESS_DENIED"
+        )
+        val deniedWrite = writeTool.execute(confirmedContext, untrustedWriteArgs)
+        assertTrue(deniedWrite is ToolResult.Failure)
+        val failure = deniedWrite as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("SAF_ACCESS_DENIED", failure.errorCode)
+    }
+
+    @Test
+    fun biometricRequiredSafWriteHonorsBioApproval() = runBlocking {
+        val gateway = FakeSafGateway().apply { grantedTrees[treeUri] = true }
+        val firewall = FakeFirewall().apply {
+            decision = FirewallDecision.RequiresBiometric(UserMessage(MessageKey.ACTION_CONFIRMATION_REQUIRED))
+        }
+        val writeTool = SafWriteTool(gateway, firewall, FakeAuditLog())
+        val targetId = ToolTargetIds.forSafTree(treeUri)
+
+        val args = mapOf(
+            "tree_uri" to Tainted.fromUserUtterance(SlotValueAst.StringValue(treeUri)),
+            "file_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("bio.txt")),
+            "content" to Tainted.fromUserUtterance(SlotValueAst.StringValue("bio data"))
+        )
+
+        // Bio false -> confirmation required with requiresBiometric = true
+        val bioFalse = createInteractiveContext(AutomationToolNames.SAF_WRITE, targetId).copy(isBiometricApproved = false)
+        val res1 = writeTool.execute(bioFalse, args)
+        assertTrue(res1 is ToolResult.ConfirmationRequired)
+        assertTrue((res1 as ToolResult.ConfirmationRequired).requiresBiometric)
+
+        // Bio true -> succeeds
+        val bioTrue = createInteractiveContext(AutomationToolNames.SAF_WRITE, targetId).copy(isBiometricApproved = true)
+        val res2 = writeTool.execute(bioTrue, args)
+        assertTrue(res2 is ToolResult.Success)
+    }
 }

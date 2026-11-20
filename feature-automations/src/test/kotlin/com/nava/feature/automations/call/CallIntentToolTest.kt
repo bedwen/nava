@@ -295,4 +295,78 @@ class CallIntentToolTest {
         val names = tools.map { it.metadata.name }.toSet()
         assertEquals(setOf(AutomationToolNames.DIAL_CALL, AutomationToolNames.PLACE_CALL), names)
     }
+
+    @Test
+    fun approvedStage2CallsExecuteCleanlyWhenUserConfirmed() = runBlocking {
+        val gateway = FakeIntentGateway().apply { callPhoneGranted = true }
+        val firewall = FakeFirewall().apply { decision = FirewallDecision.Authorized }
+        val auditLog = FakeAuditLog()
+        val dialTool = DialCallTool(gateway, firewall, auditLog)
+        val placeTool = PlaceCallTool(gateway, firewall, auditLog)
+
+        val untrustedArgs = mapOf(
+            "phone_number" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("+15552345678"),
+                SensitiveSlotKind.PHONE_NUMBER,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+
+        // 1. Unconfirmed calls escalate
+        val unconfDial = dialTool.execute(createInteractiveContext(AutomationToolNames.DIAL_CALL), untrustedArgs)
+        assertTrue(unconfDial is ToolResult.ConfirmationRequired)
+
+        val unconfPlace = placeTool.execute(createInteractiveContext(AutomationToolNames.PLACE_CALL), untrustedArgs)
+        assertTrue(unconfPlace is ToolResult.ConfirmationRequired)
+
+        // 2. Confirmed calls execute cleanly
+        val confirmedContext = createInteractiveContext(AutomationToolNames.DIAL_CALL).copy(isUserConfirmed = true)
+        val confDialRes = dialTool.execute(confirmedContext, untrustedArgs)
+        assertTrue(confDialRes is ToolResult.Success)
+        assertEquals("+15552345678", gateway.dialedNumber)
+
+        val confirmedPlaceContext = createInteractiveContext(AutomationToolNames.PLACE_CALL).copy(isUserConfirmed = true)
+        val confPlaceRes = placeTool.execute(confirmedPlaceContext, untrustedArgs)
+        assertTrue(confPlaceRes is ToolResult.Success)
+        assertEquals("+15552345678", gateway.directCalledNumber)
+
+        // 3. Denied firewall decision hard-blocks unconditionally
+        firewall.decision = FirewallDecision.Denied(
+            message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+            reasonCode = "BLOCKED_BY_FIREWALL"
+        )
+        val deniedDial = dialTool.execute(confirmedContext, untrustedArgs)
+        assertTrue(deniedDial is ToolResult.Failure)
+        assertTrue((deniedDial as ToolResult.Failure).isSecurityViolation)
+
+        val deniedPlace = placeTool.execute(confirmedPlaceContext, untrustedArgs)
+        assertTrue(deniedPlace is ToolResult.Failure)
+        assertTrue((deniedPlace as ToolResult.Failure).isSecurityViolation)
+    }
+
+    @Test
+    fun biometricRequiredDirectCallHonorsBioApproval() = runBlocking {
+        val gateway = FakeIntentGateway().apply { callPhoneGranted = true }
+        val firewall = FakeFirewall().apply {
+            decision = FirewallDecision.RequiresBiometric(UserMessage(MessageKey.ACTION_CONFIRMATION_REQUIRED))
+        }
+        val placeTool = PlaceCallTool(gateway, firewall, FakeAuditLog())
+
+        val untrustedArgs = mapOf(
+            "phone_number" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("+15552345678"),
+                SensitiveSlotKind.PHONE_NUMBER
+            )
+        )
+
+        // Only bio approved but unconfirmed -> requires confirmation because phone_number is untrusted
+        val bioOnly = createInteractiveContext(AutomationToolNames.PLACE_CALL).copy(isBiometricApproved = true, isUserConfirmed = false)
+        val bioRes = placeTool.execute(bioOnly, untrustedArgs)
+        assertTrue(bioRes is ToolResult.ConfirmationRequired)
+
+        // Both bio approved and confirmed -> succeeds
+        val fullyApproved = createInteractiveContext(AutomationToolNames.PLACE_CALL).copy(isBiometricApproved = true, isUserConfirmed = true)
+        val result = placeTool.execute(fullyApproved, untrustedArgs)
+        assertTrue(result is ToolResult.Success)
+    }
 }

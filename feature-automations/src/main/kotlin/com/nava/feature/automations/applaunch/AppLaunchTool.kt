@@ -57,7 +57,7 @@ class AppLaunchTool(
                 name = "app_name",
                 description = "Application display label to resolve and launch",
                 required = false,
-                slotKind = SensitiveSlotKind.PACKAGE_NAME,
+                slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
             )
         ),
@@ -70,19 +70,23 @@ class AppLaunchTool(
     ): ToolResult {
         val nowMs = clock()
         val worstProvenance = ToolArgumentReader.worstProvenance(arguments)
+        val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+        val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
 
         if (ToolArgumentReader.hasVaultSourceArgument(arguments)) {
-            auditLog.record(
-                AuditLogEntry(
-                    timestampEpochMs = nowMs,
-                    toolName = metadata.name,
-                    targetId = ToolTargetIds.APP_LAUNCH,
-                    actionSummary = "Blocked app launch with vault taint",
-                    provenance = worstProvenance,
-                    decision = "VAULT_EXFILTRATION_BLOCKED"
+            if (!userConfirmed) {
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = ToolTargetIds.APP_LAUNCH,
+                        actionSummary = "Blocked app launch with vault taint",
+                        provenance = worstProvenance,
+                        decision = "VAULT_EXFILTRATION_BLOCKED"
+                    )
                 )
-            )
-            return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+                return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+            }
         }
 
         val taintedTarget = ToolArgumentReader.getString(arguments, "package_name")
@@ -128,6 +132,8 @@ class AppLaunchTool(
             uriOrTarget = taintedPackage
         )
 
+        val hasUntrustedHighRisk = taintedPackage.isUntrusted || arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+
         when (firewallDecision) {
             is FirewallDecision.Denied -> {
                 auditLog.record(
@@ -147,70 +153,76 @@ class AppLaunchTool(
                 )
             }
             is FirewallDecision.RequiresConfirmation -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = targetId,
-                        actionSummary = "Firewall requested app launch confirmation",
-                        provenance = worstProvenance,
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = targetId,
-                    canonicalArguments = mapOf("package_name" to taintedPackage),
-                    requiresBiometric = false,
-                    hasUntrustedHighRiskSlot = true
-                )
-            }
-            is FirewallDecision.RequiresBiometric -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = targetId,
-                        actionSummary = "Firewall requested biometric for app launch",
-                        provenance = worstProvenance,
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = targetId,
-                    canonicalArguments = mapOf("package_name" to taintedPackage),
-                    requiresBiometric = true,
-                    hasUntrustedHighRiskSlot = true
-                )
-            }
-            FirewallDecision.Authorized -> {
-                val hasUntrusted = taintedPackage.isUntrusted || ToolArgumentReader.hasUntrustedArgument(arguments)
-                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
-                if (hasUntrusted || hasVault) {
+                if (!userConfirmed) {
                     auditLog.record(
                         AuditLogEntry(
                             timestampEpochMs = nowMs,
                             toolName = metadata.name,
                             targetId = targetId,
-                            actionSummary = "Untrusted high-risk app launch escalated to confirmation: $resolvedPackage",
-                            provenance = DataProvenance.UNTRUSTED_EXTERNAL,
+                            actionSummary = "Firewall requested app launch confirmation",
+                            provenance = worstProvenance,
                             decision = "CONFIRMATION_REQUIRED"
                         )
                     )
                     return ToolResult.ConfirmationRequired(
-                        message = UserMessage(
-                            key = MessageKey.ACTION_CONFIRMATION_REQUIRED,
-                            args = listOf(MessageArg.Text(resolvedPackage))
-                        ),
+                        message = firewallDecision.message,
                         pendingToolName = metadata.name,
                         targetId = targetId,
                         canonicalArguments = mapOf("package_name" to taintedPackage),
                         requiresBiometric = false,
                         hasUntrustedHighRiskSlot = true
                     )
+                }
+            }
+            is FirewallDecision.RequiresBiometric -> {
+                if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = targetId,
+                            actionSummary = "Firewall requested biometric for app launch",
+                            provenance = worstProvenance,
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = targetId,
+                        canonicalArguments = mapOf("package_name" to taintedPackage),
+                        requiresBiometric = true,
+                        hasUntrustedHighRiskSlot = true
+                    )
+                }
+            }
+            FirewallDecision.Authorized -> {
+                val hasUntrusted = taintedPackage.isUntrusted || ToolArgumentReader.hasUntrustedArgument(arguments)
+                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                if (hasUntrusted || hasVault) {
+                    if (!userConfirmed) {
+                        auditLog.record(
+                            AuditLogEntry(
+                                timestampEpochMs = nowMs,
+                                toolName = metadata.name,
+                                targetId = targetId,
+                                actionSummary = "Untrusted high-risk app launch escalated to confirmation: $resolvedPackage",
+                                provenance = DataProvenance.UNTRUSTED_EXTERNAL,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.ACTION_CONFIRMATION_REQUIRED,
+                                args = listOf(MessageArg.Text(resolvedPackage))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = targetId,
+                            canonicalArguments = mapOf("package_name" to taintedPackage),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = true
+                        )
+                    }
                 }
             }
         }

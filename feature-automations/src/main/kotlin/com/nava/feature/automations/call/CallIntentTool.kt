@@ -112,6 +112,10 @@ sealed class CallIntentTool(
                 uriOrTarget = taintedOutboundUri
             )
 
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+            val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+            val hasUntrustedHighRisk = phoneTainted.isUntrusted
+
             when (firewallDecision) {
                 is FirewallDecision.Denied -> {
                     recordCallAudit(
@@ -127,59 +131,65 @@ sealed class CallIntentTool(
                 }
 
                 is FirewallDecision.RequiresBiometric -> {
-                    recordCallAudit(
-                        timestampMs = nowMs,
-                        actionSummary = "Biometric confirmation required for dialer intent",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.PHONE,
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = true,
-                        hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
-                    )
+                    if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                        recordCallAudit(
+                            timestampMs = nowMs,
+                            actionSummary = "Biometric confirmation required for dialer intent",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.PHONE,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
 
                 is FirewallDecision.RequiresConfirmation -> {
-                    recordCallAudit(
-                        timestampMs = nowMs,
-                        actionSummary = "User confirmation required for dialer intent",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.PHONE,
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = true
-                    )
-                }
-
-                FirewallDecision.Authorized -> {
-                    if (phoneTainted.isUntrusted || ToolArgumentReader.hasVaultSourceArgument(arguments)) {
-                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                    if (!userConfirmed) {
                         recordCallAudit(
                             timestampMs = nowMs,
-                            actionSummary = "Taint barrier: dialer target requires user confirmation",
-                            provenance = worst,
+                            actionSummary = "User confirmation required for dialer intent",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
                             decision = "CONFIRMATION_REQUIRED"
                         )
                         return ToolResult.ConfirmationRequired(
-                            message = UserMessage(
-                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                                args = listOf(MessageArg.ProvenanceBadge(worst))
-                            ),
+                            message = firewallDecision.message,
                             pendingToolName = metadata.name,
                             targetId = ToolTargetIds.PHONE,
                             canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
                             requiresBiometric = false,
-                            hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
+                            hasUntrustedHighRiskSlot = true
                         )
+                    }
+                }
+
+                FirewallDecision.Authorized -> {
+                    if (phoneTainted.isUntrusted || ToolArgumentReader.hasVaultSourceArgument(arguments)) {
+                        if (!userConfirmed) {
+                            val worst = ToolArgumentReader.worstProvenance(arguments)
+                            recordCallAudit(
+                                timestampMs = nowMs,
+                                actionSummary = "Taint barrier: dialer target requires user confirmation",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                            return ToolResult.ConfirmationRequired(
+                                message = UserMessage(
+                                    key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                    args = listOf(MessageArg.ProvenanceBadge(worst))
+                                ),
+                                pendingToolName = metadata.name,
+                                targetId = ToolTargetIds.PHONE,
+                                canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                                requiresBiometric = false,
+                                hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
+                            )
+                        }
                     }
                 }
             }
@@ -303,6 +313,10 @@ sealed class CallIntentTool(
                 uriOrTarget = taintedOutboundUri
             )
 
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+            val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+            val hasUntrustedHighRisk = phoneTainted.isUntrusted
+
             when (firewallDecision) {
                 is FirewallDecision.Denied -> {
                     recordCallAudit(
@@ -318,59 +332,65 @@ sealed class CallIntentTool(
                 }
 
                 is FirewallDecision.RequiresBiometric -> {
-                    recordCallAudit(
-                        timestampMs = nowMs,
-                        actionSummary = "Biometric confirmation required for direct call",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.PHONE,
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = true,
-                        hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
-                    )
+                    if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                        recordCallAudit(
+                            timestampMs = nowMs,
+                            actionSummary = "Biometric confirmation required for direct call",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.PHONE,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
 
                 is FirewallDecision.RequiresConfirmation -> {
-                    recordCallAudit(
-                        timestampMs = nowMs,
-                        actionSummary = "User confirmation required for direct call",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.PHONE,
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = true
-                    )
-                }
-
-                FirewallDecision.Authorized -> {
-                    if (phoneTainted.isUntrusted || ToolArgumentReader.hasVaultSourceArgument(arguments)) {
-                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                    if (!userConfirmed) {
                         recordCallAudit(
                             timestampMs = nowMs,
-                            actionSummary = "Taint barrier: direct call target requires user confirmation",
-                            provenance = worst,
+                            actionSummary = "User confirmation required for direct call",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
                             decision = "CONFIRMATION_REQUIRED"
                         )
                         return ToolResult.ConfirmationRequired(
-                            message = UserMessage(
-                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                                args = listOf(MessageArg.ProvenanceBadge(worst))
-                            ),
+                            message = firewallDecision.message,
                             pendingToolName = metadata.name,
                             targetId = ToolTargetIds.PHONE,
                             canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
                             requiresBiometric = false,
-                            hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
+                            hasUntrustedHighRiskSlot = true
                         )
+                    }
+                }
+
+                FirewallDecision.Authorized -> {
+                    if (phoneTainted.isUntrusted || ToolArgumentReader.hasVaultSourceArgument(arguments)) {
+                        if (!userConfirmed) {
+                            val worst = ToolArgumentReader.worstProvenance(arguments)
+                            recordCallAudit(
+                                timestampMs = nowMs,
+                                actionSummary = "Taint barrier: direct call target requires user confirmation",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                            return ToolResult.ConfirmationRequired(
+                                message = UserMessage(
+                                    key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                    args = listOf(MessageArg.ProvenanceBadge(worst))
+                                ),
+                                pendingToolName = metadata.name,
+                                targetId = ToolTargetIds.PHONE,
+                                canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                                requiresBiometric = false,
+                                hasUntrustedHighRiskSlot = phoneTainted.isUntrusted
+                            )
+                        }
                     }
                 }
             }

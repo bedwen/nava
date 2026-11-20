@@ -103,6 +103,10 @@ class SmsDraftTool(
             uriOrTarget = taintedOutboundUri
         )
 
+        val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+        val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+        val hasUntrustedHighRisk = recipientTainted.isUntrusted
+
         when (firewallDecision) {
             is FirewallDecision.Denied -> {
                 recordAudit(
@@ -118,37 +122,41 @@ class SmsDraftTool(
             }
 
             is FirewallDecision.RequiresBiometric -> {
-                recordAudit(
-                    timestampMs = nowMs,
-                    actionSummary = "Biometric confirmation required for outbound SMS draft",
-                    provenance = ToolArgumentReader.worstProvenance(arguments),
-                    decision = "BIOMETRIC_REQUIRED"
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.SMS,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true,
-                    hasUntrustedHighRiskSlot = recipientTainted.isUntrusted
-                )
+                if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "Biometric confirmation required for outbound SMS draft",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "BIOMETRIC_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.SMS,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true,
+                        hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                    )
+                }
             }
 
             is FirewallDecision.RequiresConfirmation -> {
-                recordAudit(
-                    timestampMs = nowMs,
-                    actionSummary = "User confirmation required for outbound SMS draft",
-                    provenance = ToolArgumentReader.worstProvenance(arguments),
-                    decision = "CONFIRMATION_REQUIRED"
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.SMS,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = false,
-                    hasUntrustedHighRiskSlot = true
-                )
+                if (!userConfirmed) {
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "User confirmation required for outbound SMS draft",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "CONFIRMATION_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.SMS,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = false,
+                        hasUntrustedHighRiskSlot = true
+                    )
+                }
             }
 
             FirewallDecision.Authorized -> {
@@ -156,24 +164,26 @@ class SmsDraftTool(
                 val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
                 val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
                 if (hasUntrusted || hasVault) {
-                    val worst = ToolArgumentReader.worstProvenance(arguments)
-                    recordAudit(
-                        timestampMs = nowMs,
-                        actionSummary = "Taint barrier: SMS draft contains untrusted or vault content",
-                        provenance = worst,
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = UserMessage(
-                            key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                            args = listOf(MessageArg.ProvenanceBadge(worst))
-                        ),
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.SMS,
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = recipientTainted.isUntrusted
-                    )
+                    if (!userConfirmed) {
+                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                        recordAudit(
+                            timestampMs = nowMs,
+                            actionSummary = "Taint barrier: SMS draft contains untrusted or vault content",
+                            provenance = worst,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                args = listOf(MessageArg.ProvenanceBadge(worst))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.SMS,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
             }
         }

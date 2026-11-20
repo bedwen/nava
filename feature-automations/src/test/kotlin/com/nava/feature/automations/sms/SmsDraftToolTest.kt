@@ -304,4 +304,74 @@ class SmsDraftToolTest {
         assertEquals(MessageKey.ERROR_PLATFORM_UNAVAILABLE, (result as ToolResult.Failure).message.key)
         assertEquals("PLATFORM_UNAVAILABLE", auditLog.entries.first().decision)
     }
+
+    @Test
+    fun approvedStage2TaintedCallExecutesCleanlyWhenUserConfirmed() = runBlocking {
+        val gateway = FakeIntentGateway()
+        val firewall = FakeFirewall().apply { decision = FirewallDecision.Authorized }
+        val auditLog = FakeAuditLog()
+        val tool = SmsDraftTool(gateway, firewall, auditLog)
+
+        val untrustedArgs = mapOf(
+            "recipient" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("+15559876543"),
+                SensitiveSlotKind.PHONE_NUMBER,
+                sourceLabel = "notification:com.chat"
+            ),
+            "body" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("Hello from untrusted source"),
+                SensitiveSlotKind.TEXT_BODY,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+
+        // 1. Unconfirmed context (default isUserConfirmed = false) must escalate
+        val unconfirmedResult = tool.execute(createContext(), untrustedArgs)
+        assertTrue("Unconfirmed tainted SMS draft must require confirmation", unconfirmedResult is ToolResult.ConfirmationRequired)
+
+        // 2. Confirmed context (isUserConfirmed = true) executes cleanly without deadlocking
+        val confirmedContext = createContext().copy(isUserConfirmed = true)
+        val confirmedResult = tool.execute(confirmedContext, untrustedArgs)
+        assertTrue("Approved Stage 2 SMS draft must succeed", confirmedResult is ToolResult.Success)
+        assertEquals("+15559876543", gateway.dispatchedRecipient)
+        assertEquals("Hello from untrusted source", gateway.dispatchedBody)
+
+        // 3. FirewallDecision.Denied must hard-block unconditionally even when isUserConfirmed = true
+        firewall.decision = FirewallDecision.Denied(
+            message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+            reasonCode = "POLICY_DENIED"
+        )
+        val deniedResult = tool.execute(confirmedContext, untrustedArgs)
+        assertTrue("Denied firewall decision must hard-block even when confirmed", deniedResult is ToolResult.Failure)
+        val failure = deniedResult as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("POLICY_DENIED", failure.errorCode)
+    }
+
+    @Test
+    fun biometricRequiredHonorsBiometricApprovalAndUserConfirmation() = runBlocking {
+        val gateway = FakeIntentGateway()
+        val firewall = FakeFirewall().apply {
+            decision = FirewallDecision.RequiresBiometric(UserMessage(MessageKey.ACTION_CONFIRMATION_REQUIRED))
+        }
+        val tool = SmsDraftTool(gateway, firewall, FakeAuditLog())
+
+        val untrustedArgs = mapOf(
+            "recipient" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("+15559876543"),
+                SensitiveSlotKind.PHONE_NUMBER
+            ),
+            "body" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Biometric SMS"))
+        )
+
+        // Biometric approved but userConfirmed false -> still requires confirmation for untrusted high-risk slot
+        val bioOnlyContext = createContext().copy(isBiometricApproved = true, isUserConfirmed = false)
+        val bioOnlyResult = tool.execute(bioOnlyContext, untrustedArgs)
+        assertTrue(bioOnlyResult is ToolResult.ConfirmationRequired)
+
+        // Both bioApproved and userConfirmed true -> succeeds
+        val fullyApprovedContext = createContext().copy(isBiometricApproved = true, isUserConfirmed = true)
+        val result = tool.execute(fullyApprovedContext, untrustedArgs)
+        assertTrue(result is ToolResult.Success)
+    }
 }

@@ -22,6 +22,9 @@ import com.nava.domain.ui.UserMessage
 import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.ToolArgumentReader
 import com.nava.feature.automations.common.ToolTargetIds
+import java.io.FileNotFoundException
+import java.security.GeneralSecurityException
+import kotlinx.coroutines.CancellationException
 
 /**
  * Standard encrypted local notes and biometric Nava Secure Vault tools.
@@ -196,6 +199,28 @@ sealed class NotesVaultTool(
             arguments: Map<String, Tainted<SlotValueAst>>
         ): ToolResult {
             val nowMs = if (context.issuedAtEpochMs > 0L) context.issuedAtEpochMs else System.currentTimeMillis()
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+
+            if (ToolArgumentReader.hasVaultSourceArgument(arguments) && !userConfirmed) {
+                val worst = ToolArgumentReader.worstProvenance(arguments)
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Security escalation: vault secret in standard note requires confirmation",
+                    provenance = worst,
+                    decision = "CONFIRMATION_REQUIRED"
+                )
+                return ToolResult.ConfirmationRequired(
+                    message = UserMessage(
+                        key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                        args = listOf(MessageArg.ProvenanceBadge(worst))
+                    ),
+                    pendingToolName = metadata.name,
+                    targetId = ToolTargetIds.NOTES,
+                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                    requiresBiometric = false,
+                    hasUntrustedHighRiskSlot = false
+                )
+            }
 
             val bodyTainted = ToolArgumentReader.getRawString(arguments, FIELD_BODY)
                 ?: ToolArgumentReader.getRawString(arguments, "content")
@@ -407,7 +432,9 @@ sealed class NotesVaultTool(
                 } finally {
                     bytes.fill(0)
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: FileNotFoundException) {
                 recordAudit(
                     timestampMs = nowMs,
                     actionSummary = "Failed read vault note: not found ($noteId)",
@@ -415,6 +442,45 @@ sealed class NotesVaultTool(
                     decision = "NOT_FOUND"
                 )
                 return ToolArgumentReader.notFoundFailure(noteId)
+            } catch (e: NoSuchElementException) {
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Failed read vault note: not found ($noteId)",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "NOT_FOUND"
+                )
+                return ToolArgumentReader.notFoundFailure(noteId)
+            } catch (e: SecurityException) {
+                if (!vaultPort.isUnlocked()) {
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "Vault locked: biometric authentication required",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "BIOMETRIC_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = UserMessage(MessageKey.ERROR_VAULT_LOCKED),
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.VAULT,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true
+                    )
+                }
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Security violation on vault read: ${e.message}",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "SECURITY_VIOLATION"
+                )
+                return ToolArgumentReader.securityFailure("VAULT_SECURITY_VIOLATION")
+            } catch (e: GeneralSecurityException) {
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Cryptographic failure on vault read: ${e.message}",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "SECURITY_VIOLATION"
+                )
+                return ToolArgumentReader.securityFailure("VAULT_CRYPTO_FAILURE")
             }
 
             recordAudit(
@@ -514,7 +580,42 @@ sealed class NotesVaultTool(
 
             val bytes = contentTainted.value.toByteArray(Charsets.UTF_8)
             try {
-                vaultPort.writeNote(noteId, bytes)
+                try {
+                    vaultPort.writeNote(noteId, bytes)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: SecurityException) {
+                    if (!vaultPort.isUnlocked()) {
+                        recordAudit(
+                            timestampMs = nowMs,
+                            actionSummary = "Vault locked: biometric authentication required",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(MessageKey.ERROR_VAULT_LOCKED),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.VAULT,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true
+                        )
+                    }
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "Security violation on vault write: ${e.message}",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "SECURITY_VIOLATION"
+                    )
+                    return ToolArgumentReader.securityFailure("VAULT_SECURITY_VIOLATION")
+                } catch (e: GeneralSecurityException) {
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "Cryptographic failure on vault write: ${e.message}",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "SECURITY_VIOLATION"
+                    )
+                    return ToolArgumentReader.securityFailure("VAULT_CRYPTO_FAILURE")
+                }
             } finally {
                 bytes.fill(0)
             }
@@ -606,7 +707,9 @@ sealed class NotesVaultTool(
             val noteId = noteIdTainted.value.trim()
             try {
                 vaultPort.deleteNote(noteId)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: FileNotFoundException) {
                 recordAudit(
                     timestampMs = nowMs,
                     actionSummary = "Failed delete vault note: not found ($noteId)",
@@ -614,6 +717,45 @@ sealed class NotesVaultTool(
                     decision = "NOT_FOUND"
                 )
                 return ToolArgumentReader.notFoundFailure(noteId)
+            } catch (e: NoSuchElementException) {
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Failed delete vault note: not found ($noteId)",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "NOT_FOUND"
+                )
+                return ToolArgumentReader.notFoundFailure(noteId)
+            } catch (e: SecurityException) {
+                if (!vaultPort.isUnlocked()) {
+                    recordAudit(
+                        timestampMs = nowMs,
+                        actionSummary = "Vault locked: biometric authentication required",
+                        provenance = ToolArgumentReader.worstProvenance(arguments),
+                        decision = "BIOMETRIC_REQUIRED"
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = UserMessage(MessageKey.ERROR_VAULT_LOCKED),
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.VAULT,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true
+                    )
+                }
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Security violation on vault delete: ${e.message}",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "SECURITY_VIOLATION"
+                )
+                return ToolArgumentReader.securityFailure("VAULT_SECURITY_VIOLATION")
+            } catch (e: GeneralSecurityException) {
+                recordAudit(
+                    timestampMs = nowMs,
+                    actionSummary = "Cryptographic failure on vault delete: ${e.message}",
+                    provenance = ToolArgumentReader.worstProvenance(arguments),
+                    decision = "SECURITY_VIOLATION"
+                )
+                return ToolArgumentReader.securityFailure("VAULT_CRYPTO_FAILURE")
             }
 
             recordAudit(

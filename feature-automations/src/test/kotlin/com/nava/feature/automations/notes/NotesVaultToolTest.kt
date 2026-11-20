@@ -20,12 +20,14 @@ import com.nava.domain.tool.ToolResult
 import com.nava.domain.ui.MessageKey
 import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.ToolTargetIds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import javax.crypto.AEADBadTagException
 
 class NotesVaultToolTest {
 
@@ -49,12 +51,16 @@ class NotesVaultToolTest {
         val storedNotes = mutableMapOf<String, ByteArray>()
         var lastReturnedReadBuffer: ByteArray? = null
         var lastPassedWriteBuffer: ByteArray? = null
+        var throwOnRead: (() -> Throwable)? = null
+        var throwOnWrite: (() -> Throwable)? = null
+        var throwOnDelete: (() -> Throwable)? = null
 
         override suspend fun isUnlocked(): Boolean = unlocked
 
         override suspend fun listNoteIds(): List<String> = storedNotes.keys.toList()
 
         override suspend fun readNote(noteId: String): ByteArray {
+            throwOnRead?.invoke()?.let { throw it }
             val content = storedNotes[noteId] ?: throw NoSuchElementException("Vault note not found: $noteId")
             val buffer = content.copyOf()
             lastReturnedReadBuffer = buffer
@@ -63,10 +69,12 @@ class NotesVaultToolTest {
 
         override suspend fun writeNote(noteId: String, content: ByteArray) {
             lastPassedWriteBuffer = content
+            throwOnWrite?.invoke()?.let { throw it }
             storedNotes[noteId] = content.copyOf()
         }
 
         override suspend fun deleteNote(noteId: String) {
+            throwOnDelete?.invoke()?.let { throw it }
             if (!storedNotes.containsKey(noteId)) {
                 throw NoSuchElementException("Vault note not found: $noteId")
             }
@@ -365,5 +373,155 @@ class NotesVaultToolTest {
             ),
             names
         )
+    }
+
+    @Test
+    fun standardNotesCreateGuardsVaultSourceContent() = runBlocking {
+        val storage = FakeNoteStorage()
+        val auditLog = FakeAuditLog()
+        val createTool = NotesCreateTool(storage, auditLog)
+
+        val vaultSecretArgs = mapOf(
+            "title" to Tainted.fromUserUtterance(SlotValueAst.StringValue("SecretNote")),
+            "body" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("VaultSeedPhrase1234"),
+                SensitiveSlotKind.TEXT_BODY,
+                sourceLabel = "vault:note_pin"
+            )
+        )
+
+        // 1. Unconfirmed context escalates to ConfirmationRequired
+        val unconfResult = createTool.execute(
+            createInteractiveContext(AutomationToolNames.NOTES_CREATE, ToolTargetIds.NOTES),
+            vaultSecretArgs
+        )
+        assertTrue(unconfResult is ToolResult.ConfirmationRequired)
+        val conf = unconfResult as ToolResult.ConfirmationRequired
+        assertEquals(ToolTargetIds.NOTES, conf.targetId)
+        assertEquals("CONFIRMATION_REQUIRED", auditLog.entries.first().decision)
+
+        // 2. Confirmed context allows saving cleanly
+        val confirmedContext = createInteractiveContext(AutomationToolNames.NOTES_CREATE, ToolTargetIds.NOTES)
+            .copy(isUserConfirmed = true)
+        val confResult = createTool.execute(confirmedContext, vaultSecretArgs)
+        assertTrue(confResult is ToolResult.Success)
+        val savedId = (confResult as ToolResult.Success).outputValues[NotesVaultTool.FIELD_NOTE_ID]
+        assertNotNull(savedId)
+        assertEquals("VaultSeedPhrase1234", storage.findNote(savedId!!)?.body)
+    }
+
+    @Test
+    fun vaultReadHandlesCancellationExceptionToctouLockAndAeadBadTag() = runBlocking {
+        val vault = FakeVaultPort().apply { unlocked = true }
+        val auditLog = FakeAuditLog()
+        val readTool = VaultReadTool(vault, auditLog)
+        val args = mapOf("note_id" to Tainted.fromUserUtterance(SlotValueAst.StringValue("k1")))
+
+        // 1. CancellationException must be rethrown immediately
+        vault.throwOnRead = { CancellationException("Job was cancelled") }
+        var caughtCancellation = false
+        try {
+            readTool.execute(createInteractiveContext(AutomationToolNames.VAULT_READ, ToolTargetIds.VAULT), args)
+        } catch (_: CancellationException) {
+            caughtCancellation = true
+        }
+        assertTrue("CancellationException must be rethrown by VaultRead", caughtCancellation)
+
+        // 2. TOCTOU lock: SecurityException when vault is locked -> ConfirmationRequired(requiresBiometric = true)
+        vault.throwOnRead = {
+            vault.unlocked = false
+            SecurityException("Vault locked concurrently")
+        }
+        val lockResult = readTool.execute(createInteractiveContext(AutomationToolNames.VAULT_READ, ToolTargetIds.VAULT), args)
+        assertTrue(lockResult is ToolResult.ConfirmationRequired)
+        val confLock = lockResult as ToolResult.ConfirmationRequired
+        assertTrue(confLock.requiresBiometric)
+        assertEquals("BIOMETRIC_REQUIRED", auditLog.entries.last().decision)
+
+        // 3. Ciphertext tamper: AEADBadTagException -> security failure
+        vault.unlocked = true
+        vault.throwOnRead = { AEADBadTagException("Tag mismatch! Ciphertext tampered") }
+        val tamperResult = readTool.execute(createInteractiveContext(AutomationToolNames.VAULT_READ, ToolTargetIds.VAULT), args)
+        assertTrue(tamperResult is ToolResult.Failure)
+        val failTamper = tamperResult as ToolResult.Failure
+        assertTrue(failTamper.isSecurityViolation)
+        assertEquals("VAULT_CRYPTO_FAILURE", failTamper.errorCode)
+        assertEquals("SECURITY_VIOLATION", auditLog.entries.last().decision)
+    }
+
+    @Test
+    fun vaultWriteHandlesCancellationExceptionToctouLockAndAeadBadTag() = runBlocking {
+        val vault = FakeVaultPort().apply { unlocked = true }
+        val auditLog = FakeAuditLog()
+        val writeTool = VaultWriteTool(vault, auditLog)
+        val args = mapOf(
+            "note_id" to Tainted.fromUserUtterance(SlotValueAst.StringValue("k_w")),
+            "content" to Tainted.fromUserUtterance(SlotValueAst.StringValue("SecretData"))
+        )
+
+        // 1. CancellationException must be rethrown and buffer zeroized
+        vault.throwOnWrite = { CancellationException("Write cancelled") }
+        var caughtCancellation = false
+        try {
+            writeTool.execute(createInteractiveContext(AutomationToolNames.VAULT_WRITE, ToolTargetIds.VAULT), args)
+        } catch (_: CancellationException) {
+            caughtCancellation = true
+        }
+        assertTrue("CancellationException must be rethrown by VaultWrite", caughtCancellation)
+        val passedBuf = vault.lastPassedWriteBuffer
+        assertNotNull(passedBuf)
+        assertTrue("Passed write buffer must be zeroized in finally even on cancellation!", passedBuf!!.all { it == 0.toByte() })
+
+        // 2. TOCTOU lock: SecurityException when vault locked -> ConfirmationRequired
+        vault.throwOnWrite = {
+            vault.unlocked = false
+            SecurityException("Vault locked during write")
+        }
+        val lockResult = writeTool.execute(createInteractiveContext(AutomationToolNames.VAULT_WRITE, ToolTargetIds.VAULT), args)
+        assertTrue(lockResult is ToolResult.ConfirmationRequired)
+        assertTrue((lockResult as ToolResult.ConfirmationRequired).requiresBiometric)
+
+        // 3. AEADBadTagException -> security failure
+        vault.unlocked = true
+        vault.throwOnWrite = { AEADBadTagException("Key derivation bad tag") }
+        val tamperResult = writeTool.execute(createInteractiveContext(AutomationToolNames.VAULT_WRITE, ToolTargetIds.VAULT), args)
+        assertTrue(tamperResult is ToolResult.Failure)
+        assertTrue((tamperResult as ToolResult.Failure).isSecurityViolation)
+        assertEquals("VAULT_CRYPTO_FAILURE", tamperResult.errorCode)
+    }
+
+    @Test
+    fun vaultDeleteHandlesCancellationExceptionToctouLockAndAeadBadTag() = runBlocking {
+        val vault = FakeVaultPort().apply { unlocked = true }
+        val auditLog = FakeAuditLog()
+        val deleteTool = VaultDeleteTool(vault, auditLog)
+        val args = mapOf("note_id" to Tainted.fromUserUtterance(SlotValueAst.StringValue("k_d")))
+
+        // 1. CancellationException
+        vault.throwOnDelete = { CancellationException("Delete cancelled") }
+        var caughtCancellation = false
+        try {
+            deleteTool.execute(createInteractiveContext(AutomationToolNames.VAULT_DELETE, ToolTargetIds.VAULT), args)
+        } catch (_: CancellationException) {
+            caughtCancellation = true
+        }
+        assertTrue("CancellationException must be rethrown by VaultDelete", caughtCancellation)
+
+        // 2. TOCTOU lock
+        vault.throwOnDelete = {
+            vault.unlocked = false
+            SecurityException("Vault locked during delete")
+        }
+        val lockResult = deleteTool.execute(createInteractiveContext(AutomationToolNames.VAULT_DELETE, ToolTargetIds.VAULT), args)
+        assertTrue(lockResult is ToolResult.ConfirmationRequired)
+        assertTrue((lockResult as ToolResult.ConfirmationRequired).requiresBiometric)
+
+        // 3. GeneralSecurityException
+        vault.unlocked = true
+        vault.throwOnDelete = { AEADBadTagException("Bad tag during delete") }
+        val tamperResult = deleteTool.execute(createInteractiveContext(AutomationToolNames.VAULT_DELETE, ToolTargetIds.VAULT), args)
+        assertTrue(tamperResult is ToolResult.Failure)
+        assertTrue((tamperResult as ToolResult.Failure).isSecurityViolation)
+        assertEquals("VAULT_CRYPTO_FAILURE", tamperResult.errorCode)
     }
 }

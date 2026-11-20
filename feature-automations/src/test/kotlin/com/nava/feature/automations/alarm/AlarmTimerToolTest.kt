@@ -20,6 +20,7 @@ import com.nava.feature.automations.common.PlatformDispatchResult
 import com.nava.feature.automations.common.ToolTargetIds
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -317,5 +318,36 @@ class AlarmTimerToolTest {
         )
         val result2 = composite.setTimerTool.execute(testContext(), badUnitArgs)
         assertTrue(result2 is ToolResult.Failure)
+    }
+
+    @Test
+    fun auditLogRedactsUserSuppliedAlarmAndTimerLabels() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        val alarmLabel = "CONFIDENTIAL_ALARM_LABEL"
+        val alarmArgs = mapOf(
+            "hour" to Tainted.fromUserUtterance(SlotValueAst.IntValue(7)),
+            "minute" to Tainted.fromUserUtterance(SlotValueAst.IntValue(30)),
+            "label" to Tainted.fromUserUtterance(SlotValueAst.StringValue(alarmLabel))
+        )
+        val alarmRes = composite.setAlarmTool.execute(testContext(), alarmArgs)
+        assertTrue(alarmRes is ToolResult.Success)
+
+        val alarmEntry = fakeAudit.records.lastOrNull { it.toolName == AutomationToolNames.SET_ALARM && it.decision == "SUCCESS" }
+        assertNotNull(alarmEntry)
+        assertFalse("Audit log must redact alarm label from actionSummary", alarmEntry!!.actionSummary.contains(alarmLabel))
+        assertEquals("Set alarm for 07:30", alarmEntry.actionSummary)
+
+        val timerLabel = "CONFIDENTIAL_TIMER_LABEL"
+        val timerArgs = mapOf(
+            "duration_seconds" to Tainted.fromUserUtterance(SlotValueAst.IntValue(300)),
+            "label" to Tainted.fromUserUtterance(SlotValueAst.StringValue(timerLabel))
+        )
+        val timerRes = composite.setTimerTool.execute(testContext(), timerArgs)
+        assertTrue(timerRes is ToolResult.Success)
+
+        val timerEntry = fakeAudit.records.lastOrNull { it.toolName == AutomationToolNames.SET_TIMER && it.decision == "SUCCESS" }
+        assertNotNull(timerEntry)
+        assertFalse("Audit log must redact timer label from actionSummary", timerEntry!!.actionSummary.contains(timerLabel))
+        assertEquals("Set timer for 300s", timerEntry.actionSummary)
     }
 }

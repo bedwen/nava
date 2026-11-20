@@ -28,6 +28,13 @@ import com.nava.feature.automations.common.CalendarGatewayResult
 import com.nava.feature.automations.common.CalendarPlatformGateway
 import com.nava.feature.automations.common.ToolArgumentReader
 import com.nava.feature.automations.common.ToolTargetIds
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeParseException
 import java.util.Locale
 
 /**
@@ -48,6 +55,64 @@ class CalendarTool(
     fun allTools(): List<NavaTool> = listOf(queryTool, createTool, modifyTool)
 
     override fun iterator(): Iterator<NavaTool> = allTools().iterator()
+}
+
+private sealed interface ParsedEpochResult {
+    data class Value(val epochMs: Long) : ParsedEpochResult
+    data object Absent : ParsedEpochResult
+    data object Invalid : ParsedEpochResult
+}
+
+private fun parseEpochArgument(
+    arguments: Map<String, Tainted<SlotValueAst>>,
+    vararg keys: String
+): ParsedEpochResult {
+    for (key in keys) {
+        val found = arguments[key] ?: continue
+        val parsed = when (val ast = found.value) {
+            is SlotValueAst.IntValue -> ParsedEpochResult.Value(ast.value)
+            is SlotValueAst.StringValue -> {
+                val text = ast.value.trim()
+                if (text.isEmpty()) {
+                    ParsedEpochResult.Absent
+                } else {
+                    parseIsoOrEpochString(text)
+                }
+            }
+            else -> ParsedEpochResult.Invalid
+        }
+        if (parsed is ParsedEpochResult.Invalid) return ParsedEpochResult.Invalid
+        if (parsed is ParsedEpochResult.Value) return parsed
+    }
+    return ParsedEpochResult.Absent
+}
+
+private fun parseIsoOrEpochString(text: String): ParsedEpochResult {
+    text.toLongOrNull()?.let { return ParsedEpochResult.Value(it) }
+
+    try {
+        return ParsedEpochResult.Value(Instant.parse(text).toEpochMilli())
+    } catch (_: DateTimeParseException) {}
+
+    try {
+        return ParsedEpochResult.Value(OffsetDateTime.parse(text).toInstant().toEpochMilli())
+    } catch (_: DateTimeParseException) {}
+
+    try {
+        return ParsedEpochResult.Value(ZonedDateTime.parse(text).toInstant().toEpochMilli())
+    } catch (_: DateTimeParseException) {}
+
+    try {
+        val ldt = LocalDateTime.parse(text)
+        return ParsedEpochResult.Value(ldt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+    } catch (_: DateTimeParseException) {}
+
+    try {
+        val ld = LocalDate.parse(text)
+        return ParsedEpochResult.Value(ld.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli())
+    } catch (_: DateTimeParseException) {}
+
+    return ParsedEpochResult.Invalid
 }
 
 /**
@@ -114,14 +179,56 @@ class CalendarQueryTool(
     ): ToolResult {
         val nowMs = clock()
         val worstProvenance = ToolArgumentReader.worstProvenance(arguments)
+        val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+        val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
 
-        val startEpoch = ToolArgumentReader.getLong(arguments, "start_epoch_ms")?.value
-            ?: ToolArgumentReader.getLong(arguments, "start_time")?.value
-            ?: nowMs
+        val startParsed = parseEpochArgument(arguments, "start_time", "start_epoch_ms")
+        if (startParsed is ParsedEpochResult.Invalid) {
+            val failure = ToolResult.Failure(
+                message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                errorCode = "INVALID_ARGUMENTS"
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = ToolTargetIds.CALENDAR,
+                    actionSummary = "Invalid calendar query time: invalid start_time",
+                    provenance = worstProvenance,
+                    decision = failure.errorCode
+                )
+            )
+            return failure
+        }
 
-        val endEpoch = ToolArgumentReader.getLong(arguments, "end_epoch_ms")?.value
-            ?: ToolArgumentReader.getLong(arguments, "end_time")?.value
-            ?: (startEpoch + ONE_DAY_MS)
+        val endParsed = parseEpochArgument(arguments, "end_time", "end_epoch_ms")
+        if (endParsed is ParsedEpochResult.Invalid) {
+            val failure = ToolResult.Failure(
+                message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                errorCode = "INVALID_ARGUMENTS"
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = ToolTargetIds.CALENDAR,
+                    actionSummary = "Invalid calendar query time: invalid end_time",
+                    provenance = worstProvenance,
+                    decision = failure.errorCode
+                )
+            )
+            return failure
+        }
+
+        val startEpoch = when (startParsed) {
+            is ParsedEpochResult.Value -> startParsed.epochMs
+            else -> nowMs
+        }
+
+        val endEpoch = when (endParsed) {
+            is ParsedEpochResult.Value -> endParsed.epochMs
+            else -> (startEpoch + ONE_DAY_MS)
+        }
 
         if (endEpoch < startEpoch) {
             val failure = ToolArgumentReader.invalidArgumentsFailure("end_epoch_ms must be >= start_epoch_ms")
@@ -166,41 +273,45 @@ class CalendarQueryTool(
                 )
             }
             is FirewallDecision.RequiresConfirmation -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar query requires confirmation",
-                        provenance = worstProvenance,
-                        decision = "CONFIRMATION_REQUIRED"
+                if (!userConfirmed) {
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar query requires confirmation",
+                            provenance = worstProvenance,
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
                     )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments)
-                )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments)
+                    )
+                }
             }
             is FirewallDecision.RequiresBiometric -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar query requires biometric",
-                        provenance = worstProvenance,
-                        decision = "BIOMETRIC_REQUIRED"
+                if (!bioApproved) {
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar query requires biometric",
+                            provenance = worstProvenance,
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
                     )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true
-                )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true
+                    )
+                }
             }
             FirewallDecision.Authorized -> Unit
         }
@@ -361,19 +472,23 @@ class CalendarCreateTool(
     ): ToolResult {
         val nowMs = clock()
         val worstProvenance = ToolArgumentReader.worstProvenance(arguments)
+        val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+        val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
 
         if (ToolArgumentReader.hasVaultSourceArgument(arguments)) {
-            auditLog.record(
-                AuditLogEntry(
-                    timestampEpochMs = nowMs,
-                    toolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    actionSummary = "Blocked calendar create with vault taint",
-                    provenance = worstProvenance,
-                    decision = "VAULT_EXFILTRATION_BLOCKED"
+            if (!userConfirmed) {
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        actionSummary = "Blocked calendar create with vault taint",
+                        provenance = worstProvenance,
+                        decision = "VAULT_EXFILTRATION_BLOCKED"
+                    )
                 )
-            )
-            return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+                return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+            }
         }
 
         val rawTitle = ToolArgumentReader.getString(arguments, "title")?.value
@@ -407,13 +522,53 @@ class CalendarCreateTool(
             return failure
         }
 
-        val startEpoch = ToolArgumentReader.getLong(arguments, "start_epoch_ms")?.value
-            ?: ToolArgumentReader.getLong(arguments, "start_time")?.value
-            ?: (nowMs + ONE_HOUR_MS)
+        val startParsed = parseEpochArgument(arguments, "start_time", "start_epoch_ms")
+        if (startParsed is ParsedEpochResult.Invalid) {
+            val failure = ToolResult.Failure(
+                message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                errorCode = "INVALID_ARGUMENTS"
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = ToolTargetIds.CALENDAR,
+                    actionSummary = "Invalid calendar create time: invalid start_time",
+                    provenance = worstProvenance,
+                    decision = failure.errorCode
+                )
+            )
+            return failure
+        }
 
-        val endEpoch = ToolArgumentReader.getLong(arguments, "end_epoch_ms")?.value
-            ?: ToolArgumentReader.getLong(arguments, "end_time")?.value
-            ?: (startEpoch + ONE_HOUR_MS)
+        val endParsed = parseEpochArgument(arguments, "end_time", "end_epoch_ms")
+        if (endParsed is ParsedEpochResult.Invalid) {
+            val failure = ToolResult.Failure(
+                message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                errorCode = "INVALID_ARGUMENTS"
+            )
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = ToolTargetIds.CALENDAR,
+                    actionSummary = "Invalid calendar create time: invalid end_time",
+                    provenance = worstProvenance,
+                    decision = failure.errorCode
+                )
+            )
+            return failure
+        }
+
+        val startEpoch = when (startParsed) {
+            is ParsedEpochResult.Value -> startParsed.epochMs
+            else -> (nowMs + ONE_HOUR_MS)
+        }
+
+        val endEpoch = when (endParsed) {
+            is ParsedEpochResult.Value -> endParsed.epochMs
+            else -> (startEpoch + ONE_HOUR_MS)
+        }
 
         if (endEpoch < startEpoch) {
             val failure = ToolArgumentReader.invalidArgumentsFailure("end_epoch_ms must be >= start_epoch_ms")
@@ -462,6 +617,8 @@ class CalendarCreateTool(
             uriOrTarget = taintedTargetUri
         )
 
+        val hasUntrustedHighRisk = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+
         when (firewallDecision) {
             is FirewallDecision.Denied -> {
                 auditLog.record(
@@ -481,71 +638,77 @@ class CalendarCreateTool(
                 )
             }
             is FirewallDecision.RequiresConfirmation -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar create requires confirmation",
-                        provenance = worstProvenance,
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = false,
-                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
-                )
-            }
-            is FirewallDecision.RequiresBiometric -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar create requires biometric",
-                        provenance = worstProvenance,
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true,
-                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
-                )
-            }
-            FirewallDecision.Authorized -> {
-                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
-                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
-                if (hasUntrusted || hasVault) {
-                    val worst = ToolArgumentReader.worstProvenance(arguments)
+                if (!userConfirmed) {
                     auditLog.record(
                         AuditLogEntry(
                             timestampEpochMs = nowMs,
                             toolName = metadata.name,
                             targetId = ToolTargetIds.CALENDAR,
-                            actionSummary = "Calendar create requires confirmation due to untrusted/vault arguments",
-                            provenance = worst,
+                            actionSummary = "Calendar create requires confirmation",
+                            provenance = worstProvenance,
                             decision = "CONFIRMATION_REQUIRED"
                         )
                     )
                     return ToolResult.ConfirmationRequired(
-                        message = UserMessage(
-                            key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                            args = listOf(MessageArg.ProvenanceBadge(worst))
-                        ),
+                        message = firewallDecision.message,
                         pendingToolName = metadata.name,
                         targetId = ToolTargetIds.CALENDAR,
                         canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
                         requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+                        hasUntrustedHighRiskSlot = hasUntrustedHighRisk
                     )
+                }
+            }
+            is FirewallDecision.RequiresBiometric -> {
+                if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar create requires biometric",
+                            provenance = worstProvenance,
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true,
+                        hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                    )
+                }
+            }
+            FirewallDecision.Authorized -> {
+                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
+                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                if (hasUntrusted || hasVault) {
+                    if (!userConfirmed) {
+                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                        auditLog.record(
+                            AuditLogEntry(
+                                timestampEpochMs = nowMs,
+                                toolName = metadata.name,
+                                targetId = ToolTargetIds.CALENDAR,
+                                actionSummary = "Calendar create requires confirmation due to untrusted/vault arguments",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                args = listOf(MessageArg.ProvenanceBadge(worst))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
             }
         }
@@ -558,7 +721,7 @@ class CalendarCreateTool(
                         timestampEpochMs = nowMs,
                         toolName = metadata.name,
                         targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Created calendar event '$title' (id=$eventId)",
+                        actionSummary = "Created calendar event (id=$eventId)",
                         provenance = worstProvenance,
                         decision = "SUCCESS"
                     )
@@ -631,7 +794,7 @@ class CalendarModifyTool(
                 name = "operation",
                 description = "Modification operation ('update' or 'delete')",
                 required = true,
-                slotKind = SensitiveSlotKind.INTENT_ACTION,
+                slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
             ),
             ToolSchemaField(
@@ -693,6 +856,8 @@ class CalendarModifyTool(
     ): ToolResult {
         val nowMs = clock()
         val worstProvenance = ToolArgumentReader.worstProvenance(arguments)
+        val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+        val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
 
         if (context.isUnattendedBackground) {
             auditLog.record(
@@ -709,17 +874,19 @@ class CalendarModifyTool(
         }
 
         if (ToolArgumentReader.hasVaultSourceArgument(arguments)) {
-            auditLog.record(
-                AuditLogEntry(
-                    timestampEpochMs = nowMs,
-                    toolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    actionSummary = "Blocked calendar modify with vault taint",
-                    provenance = worstProvenance,
-                    decision = "VAULT_EXFILTRATION_BLOCKED"
+            if (!userConfirmed) {
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        actionSummary = "Blocked calendar modify with vault taint",
+                        provenance = worstProvenance,
+                        decision = "VAULT_EXFILTRATION_BLOCKED"
+                    )
                 )
-            )
-            return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+                return ToolArgumentReader.securityFailure("VAULT_DATA_EXFILTRATION_BLOCKED")
+            }
         }
 
         val eventId = ToolArgumentReader.getLong(arguments, "event_id")?.value
@@ -765,6 +932,8 @@ class CalendarModifyTool(
             uriOrTarget = taintedTargetUri
         )
 
+        val hasUntrustedHighRisk = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+
         when (firewallDecision) {
             is FirewallDecision.Denied -> {
                 auditLog.record(
@@ -784,71 +953,77 @@ class CalendarModifyTool(
                 )
             }
             is FirewallDecision.RequiresConfirmation -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar modify requires confirmation",
-                        provenance = worstProvenance,
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = false,
-                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
-                )
-            }
-            is FirewallDecision.RequiresBiometric -> {
-                auditLog.record(
-                    AuditLogEntry(
-                        timestampEpochMs = nowMs,
-                        toolName = metadata.name,
-                        targetId = ToolTargetIds.CALENDAR,
-                        actionSummary = "Calendar modify requires biometric",
-                        provenance = worstProvenance,
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                )
-                return ToolResult.ConfirmationRequired(
-                    message = firewallDecision.message,
-                    pendingToolName = metadata.name,
-                    targetId = ToolTargetIds.CALENDAR,
-                    canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                    requiresBiometric = true,
-                    hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
-                )
-            }
-            FirewallDecision.Authorized -> {
-                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
-                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
-                if (hasUntrusted || hasVault) {
-                    val worst = ToolArgumentReader.worstProvenance(arguments)
+                if (!userConfirmed) {
                     auditLog.record(
                         AuditLogEntry(
                             timestampEpochMs = nowMs,
                             toolName = metadata.name,
                             targetId = ToolTargetIds.CALENDAR,
-                            actionSummary = "Calendar modify requires confirmation due to untrusted/vault arguments",
-                            provenance = worst,
+                            actionSummary = "Calendar modify requires confirmation",
+                            provenance = worstProvenance,
                             decision = "CONFIRMATION_REQUIRED"
                         )
                     )
                     return ToolResult.ConfirmationRequired(
-                        message = UserMessage(
-                            key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                            args = listOf(MessageArg.ProvenanceBadge(worst))
-                        ),
+                        message = firewallDecision.message,
                         pendingToolName = metadata.name,
                         targetId = ToolTargetIds.CALENDAR,
                         canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
                         requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+                        hasUntrustedHighRiskSlot = hasUntrustedHighRisk
                     )
+                }
+            }
+            is FirewallDecision.RequiresBiometric -> {
+                if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                    auditLog.record(
+                        AuditLogEntry(
+                            timestampEpochMs = nowMs,
+                            toolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            actionSummary = "Calendar modify requires biometric",
+                            provenance = worstProvenance,
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                    )
+                    return ToolResult.ConfirmationRequired(
+                        message = firewallDecision.message,
+                        pendingToolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                        requiresBiometric = true,
+                        hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                    )
+                }
+            }
+            FirewallDecision.Authorized -> {
+                val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
+                val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                if (hasUntrusted || hasVault) {
+                    if (!userConfirmed) {
+                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                        auditLog.record(
+                            AuditLogEntry(
+                                timestampEpochMs = nowMs,
+                                toolName = metadata.name,
+                                targetId = ToolTargetIds.CALENDAR,
+                                actionSummary = "Calendar modify requires confirmation due to untrusted/vault arguments",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = UserMessage(
+                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                args = listOf(MessageArg.ProvenanceBadge(worst))
+                            ),
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.CALENDAR,
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
             }
         }
@@ -924,8 +1099,45 @@ class CalendarModifyTool(
             val location = ToolArgumentReader.getString(arguments, "location")?.value?.let {
                 Gemma4InputSanitizer.sanitize(it)
             }
-            val startEpoch = ToolArgumentReader.getLong(arguments, "start_epoch_ms")?.value
-            val endEpoch = ToolArgumentReader.getLong(arguments, "end_epoch_ms")?.value
+            val startParsed = parseEpochArgument(arguments, "start_time", "start_epoch_ms")
+            if (startParsed is ParsedEpochResult.Invalid) {
+                val failure = ToolResult.Failure(
+                    message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                    errorCode = "INVALID_ARGUMENTS"
+                )
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        actionSummary = "Invalid calendar modify: invalid start_time",
+                        provenance = worstProvenance,
+                        decision = failure.errorCode
+                    )
+                )
+                return failure
+            }
+            val endParsed = parseEpochArgument(arguments, "end_time", "end_epoch_ms")
+            if (endParsed is ParsedEpochResult.Invalid) {
+                val failure = ToolResult.Failure(
+                    message = UserMessage(MessageKey.ERROR_INVALID_ARGUMENTS),
+                    errorCode = "INVALID_ARGUMENTS"
+                )
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = ToolTargetIds.CALENDAR,
+                        actionSummary = "Invalid calendar modify: invalid end_time",
+                        provenance = worstProvenance,
+                        decision = failure.errorCode
+                    )
+                )
+                return failure
+            }
+
+            val startEpoch = (startParsed as? ParsedEpochResult.Value)?.epochMs
+            val endEpoch = (endParsed as? ParsedEpochResult.Value)?.epochMs
             val allDay = ToolArgumentReader.getBoolean(arguments, "all_day")?.value
 
             if (startEpoch != null && endEpoch != null && endEpoch < startEpoch) {

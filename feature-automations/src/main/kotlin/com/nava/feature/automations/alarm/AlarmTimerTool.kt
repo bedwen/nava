@@ -229,11 +229,7 @@ class SetAlarmTool(
         return when (val dispatch = intentGateway.dispatchSetAlarm(hour, minute, label, skipUi)) {
             is PlatformDispatchResult.Dispatched -> {
                 val timeString = "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
-                val summary = if (label.isNullOrBlank()) {
-                    "Set alarm for $timeString"
-                } else {
-                    "Set alarm for $timeString labeled '$label'"
-                }
+                val summary = "Set alarm for $timeString"
                 auditLog.record(
                     AuditLogEntry(
                         timestampEpochMs = nowMs,
@@ -521,11 +517,7 @@ class SetTimerTool(
 
         return when (val dispatch = intentGateway.dispatchSetTimer(totalSeconds, label, skipUi)) {
             is PlatformDispatchResult.Dispatched -> {
-                val summary = if (label.isNullOrBlank()) {
-                    "Set timer for ${totalSeconds}s"
-                } else {
-                    "Set timer for ${totalSeconds}s labeled '$label'"
-                }
+                val summary = "Set timer for ${totalSeconds}s"
                 auditLog.record(
                     AuditLogEntry(
                         timestampEpochMs = nowMs,
