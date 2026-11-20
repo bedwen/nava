@@ -144,6 +144,9 @@ class AppLaunchToolTest {
         val packageField = tool.metadata.fieldByName("package_name")
         assertNotNull(packageField)
         assertEquals(SensitiveSlotKind.PACKAGE_NAME, packageField!!.slotKind)
+        val appNameField = tool.metadata.fieldByName("app_name")
+        assertNotNull(appNameField)
+        assertEquals(SensitiveSlotKind.TEXT_BODY, appNameField!!.slotKind)
     }
 
     @Test
@@ -253,5 +256,40 @@ class AppLaunchToolTest {
         val unavailResult = tool.execute(testContext(), args)
         assertTrue(unavailResult is ToolResult.Failure)
         assertEquals(MessageKey.ERROR_PLATFORM_UNAVAILABLE, (unavailResult as ToolResult.Failure).message.key)
+    }
+
+    @Test
+    fun approvedStage2AppLaunchExecutesCleanlyWhenUserConfirmed() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.launchResult = PlatformDispatchResult.Dispatched()
+
+        val untrustedArgs = mapOf(
+            "app_name" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("Calculator"),
+                SensitiveSlotKind.TEXT_BODY,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+
+        // 1. Unconfirmed launch escalates to confirmation
+        val unconfResult = tool.execute(testContext(), untrustedArgs)
+        assertTrue(unconfResult is ToolResult.ConfirmationRequired)
+
+        // 2. Confirmed launch executes cleanly
+        val confirmedContext = testContext().copy(isUserConfirmed = true)
+        val confResult = tool.execute(confirmedContext, untrustedArgs)
+        assertTrue(confResult is ToolResult.Success)
+        assertEquals("com.android.calculator2", fakeGateway.lastLaunchedPackage)
+
+        // 3. Denied firewall decision hard-blocks unconditionally even when confirmed
+        fakeFirewall.outboundDecision = FirewallDecision.Denied(
+            message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+            reasonCode = "BLOCKED_APP_LAUNCH"
+        )
+        val deniedResult = tool.execute(confirmedContext, untrustedArgs)
+        assertTrue(deniedResult is ToolResult.Failure)
+        val failure = deniedResult as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("BLOCKED_APP_LAUNCH", failure.errorCode)
     }
 }

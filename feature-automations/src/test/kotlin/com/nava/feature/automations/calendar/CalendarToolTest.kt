@@ -360,4 +360,156 @@ class CalendarToolTest {
         assertTrue(result is ToolResult.Failure)
         assertEquals(MessageKey.ERROR_NOT_FOUND, (result as ToolResult.Failure).message.key)
     }
+
+    @Test
+    fun calendarModifyOperationSlotKindIsTextBody() {
+        val opField = composite.modifyTool.metadata.fields.first { it.name == "operation" }
+        assertEquals(SensitiveSlotKind.TEXT_BODY, opField.slotKind)
+    }
+
+    @Test
+    fun calendarQueryAndCreateSupportIso8601DatetimeStrings() = runBlocking {
+        val isoStart = "2026-11-20T10:00:00Z"
+        val isoEnd = "2026-11-20T12:00:00Z"
+        val startEpoch = java.time.Instant.parse(isoStart).toEpochMilli()
+        val endEpoch = java.time.Instant.parse(isoEnd).toEpochMilli()
+
+        // 1. CalendarQueryTool with ISO-8601 strings
+        fakeGateway.storedEvents[101L] = CalendarEventRecord(
+            eventId = 101L,
+            calendarId = 1L,
+            title = "ISO Event",
+            startEpochMs = startEpoch + 1000L,
+            endEpochMs = endEpoch - 1000L
+        )
+        val queryArgs = mapOf(
+            "start_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue(isoStart)),
+            "end_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue(isoEnd))
+        )
+        val queryResult = composite.queryTool.execute(testInteractiveContext(), queryArgs)
+        assertTrue(queryResult is ToolResult.Success)
+        assertEquals("1", (queryResult as ToolResult.Success).outputValues["count"])
+
+        // 2. CalendarCreateTool with ISO-8601 strings
+        val createArgs = mapOf(
+            "title" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Team Standup")),
+            "start_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue(isoStart)),
+            "end_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue(isoEnd))
+        )
+        val createResult = composite.createTool.execute(testInteractiveContext(), createArgs)
+        assertTrue(createResult is ToolResult.Success)
+        val createdId = (createResult as ToolResult.Success).outputValues["event_id"]!!.toLong()
+        val createdRecord = fakeGateway.storedEvents[createdId]
+        assertNotNull(createdRecord)
+        assertEquals(startEpoch, createdRecord!!.startEpochMs)
+        assertEquals(endEpoch, createdRecord.endEpochMs)
+    }
+
+    @Test
+    fun calendarQueryAndCreateRejectUnparseableDatetimeStrings() = runBlocking {
+        val badQueryArgs = mapOf(
+            "start_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue("unparseable-date"))
+        )
+        val queryResult = composite.queryTool.execute(testInteractiveContext(), badQueryArgs)
+        assertTrue(queryResult is ToolResult.Failure)
+        assertEquals("INVALID_ARGUMENTS", (queryResult as ToolResult.Failure).errorCode)
+
+        val badCreateArgs = mapOf(
+            "title" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Standup")),
+            "end_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue("invalid-date-format"))
+        )
+        val createResult = composite.createTool.execute(testInteractiveContext(), badCreateArgs)
+        assertTrue(createResult is ToolResult.Failure)
+        assertEquals("INVALID_ARGUMENTS", (createResult as ToolResult.Failure).errorCode)
+
+        fakeGateway.storedEvents[202L] = CalendarEventRecord(
+            eventId = 202L,
+            calendarId = 1L,
+            title = "Test",
+            startEpochMs = 1000L,
+            endEpochMs = 2000L
+        )
+        val badModifyArgs = mapOf(
+            "operation" to Tainted.fromUserUtterance(SlotValueAst.StringValue("update")),
+            "event_id" to Tainted.fromUserUtterance(SlotValueAst.IntValue(202L)),
+            "start_time" to Tainted.fromUserUtterance(SlotValueAst.StringValue("not-a-date"))
+        )
+        val modifyResult = composite.modifyTool.execute(testInteractiveContext(), badModifyArgs)
+        assertTrue(modifyResult is ToolResult.Failure)
+        assertEquals("INVALID_ARGUMENTS", (modifyResult as ToolResult.Failure).errorCode)
+    }
+
+    @Test
+    fun approvedStage2CalendarCallsExecuteCleanlyWhenUserConfirmed() = runBlocking {
+        val untrustedCreateArgs = mapOf(
+            "title" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("Injected Meeting"),
+                SensitiveSlotKind.EVENT_TITLE,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+
+        // 1. Unconfirmed create escalates
+        val unconfCreate = composite.createTool.execute(testInteractiveContext(), untrustedCreateArgs)
+        assertTrue(unconfCreate is ToolResult.ConfirmationRequired)
+
+        // 2. Confirmed create succeeds cleanly
+        val confirmedContext = testInteractiveContext().copy(isUserConfirmed = true)
+        val confCreateRes = composite.createTool.execute(confirmedContext, untrustedCreateArgs)
+        assertTrue(confCreateRes is ToolResult.Success)
+
+        // 3. Unconfirmed modify escalates
+        fakeGateway.storedEvents[303L] = CalendarEventRecord(
+            eventId = 303L,
+            calendarId = 1L,
+            title = "Existing",
+            startEpochMs = 1000L,
+            endEpochMs = 2000L
+        )
+        val untrustedModifyArgs = mapOf(
+            "operation" to Tainted.fromUserUtterance(SlotValueAst.StringValue("update")),
+            "event_id" to Tainted.fromUserUtterance(SlotValueAst.IntValue(303L)),
+            "title" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("Overwritten"),
+                SensitiveSlotKind.EVENT_TITLE,
+                sourceLabel = "notification:com.chat"
+            )
+        )
+        val unconfModify = composite.modifyTool.execute(testInteractiveContext(), untrustedModifyArgs)
+        assertTrue(unconfModify is ToolResult.ConfirmationRequired)
+
+        // Confirmed modify succeeds
+        val confModifyRes = composite.modifyTool.execute(confirmedContext, untrustedModifyArgs)
+        assertTrue(confModifyRes is ToolResult.Success)
+
+        // 4. Denied firewall decision hard-blocks unconditionally even when isUserConfirmed = true
+        fakeFirewall.outboundDecision = FirewallDecision.Denied(
+            message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+            reasonCode = "CALENDAR_BLOCKED"
+        )
+        val deniedRes = composite.createTool.execute(confirmedContext, untrustedCreateArgs)
+        assertTrue(deniedRes is ToolResult.Failure)
+        val failure = deniedRes as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("CALENDAR_BLOCKED", failure.errorCode)
+    }
+
+    @Test
+    fun calendarAuditLogRedactsUserSuppliedTitle() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        val sensitiveTitle = "SECRET_PROJECT_ALPHA_ROADMAP"
+        val args = mapOf(
+            "title" to Tainted.fromUserUtterance(SlotValueAst.StringValue(sensitiveTitle))
+        )
+        val result = composite.createTool.execute(testInteractiveContext(), args)
+        assertTrue(result is ToolResult.Success)
+
+        val createEntry = fakeAudit.records.firstOrNull { it.toolName == AutomationToolNames.CALENDAR_CREATE && it.decision == "SUCCESS" }
+        assertNotNull(createEntry)
+        assertFalse(
+            "Audit log MUST redact sensitive event title from actionSummary!",
+            createEntry!!.actionSummary.contains(sensitiveTitle)
+        )
+        assertTrue(createEntry.actionSummary.startsWith("Created calendar event (id="))
+    }
 }

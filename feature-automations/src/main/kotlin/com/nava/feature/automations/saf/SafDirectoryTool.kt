@@ -168,6 +168,10 @@ sealed class SafDirectoryTool(
                 uriOrTarget = taintedTargetUri
             )
 
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+            val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+            val hasUntrustedHighRisk = treeUriTainted.isUntrusted || fileNameTainted?.isUntrusted == true
+
             when (firewallDecision) {
                 is FirewallDecision.Denied -> {
                     recordSafAudit(
@@ -184,64 +188,70 @@ sealed class SafDirectoryTool(
                 }
 
                 is FirewallDecision.RequiresBiometric -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "Biometric confirmation required for SAF read target: $targetUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = true,
-                        hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted?.isUntrusted == true
-                    )
+                    if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "Biometric confirmation required for SAF read target: $targetUriString",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
 
                 is FirewallDecision.RequiresConfirmation -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "User confirmation required for SAF read target: $targetUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = true
-                    )
-                }
-
-                FirewallDecision.Authorized -> {
-                    val hasUntrusted = treeUriTainted.isUntrusted || fileNameTainted?.isUntrusted == true
-                    val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
-                    if (hasUntrusted || hasVault) {
-                        val worst = ToolArgumentReader.worstProvenance(arguments)
+                    if (!userConfirmed) {
                         recordSafAudit(
                             timestampMs = nowMs,
                             treeUri = rawTreeUri,
                             actionSummary = "User confirmation required for SAF read target: $targetUriString",
-                            provenance = worst,
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
                             decision = "CONFIRMATION_REQUIRED"
                         )
                         return ToolResult.ConfirmationRequired(
-                            message = UserMessage(
-                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                                args = listOf(MessageArg.ProvenanceBadge(worst))
-                            ),
+                            message = firewallDecision.message,
                             pendingToolName = metadata.name,
                             targetId = ToolTargetIds.forSafTree(rawTreeUri),
                             canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
                             requiresBiometric = false,
                             hasUntrustedHighRiskSlot = true
                         )
+                    }
+                }
+
+                FirewallDecision.Authorized -> {
+                    val hasUntrusted = treeUriTainted.isUntrusted || fileNameTainted?.isUntrusted == true
+                    val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
+                    if (hasUntrusted || hasVault) {
+                        if (!userConfirmed) {
+                            val worst = ToolArgumentReader.worstProvenance(arguments)
+                            recordSafAudit(
+                                timestampMs = nowMs,
+                                treeUri = rawTreeUri,
+                                actionSummary = "User confirmation required for SAF read target: $targetUriString",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                            return ToolResult.ConfirmationRequired(
+                                message = UserMessage(
+                                    key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                    args = listOf(MessageArg.ProvenanceBadge(worst))
+                                ),
+                                pendingToolName = metadata.name,
+                                targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                                canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                                requiresBiometric = false,
+                                hasUntrustedHighRiskSlot = true
+                            )
+                        }
                     }
                 }
             }
@@ -496,6 +506,10 @@ sealed class SafDirectoryTool(
                 uriOrTarget = taintedTargetDocUri
             )
 
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+            val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+            val hasUntrustedHighRisk = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
+
             when (firewallDecision) {
                 is FirewallDecision.Denied -> {
                     recordSafAudit(
@@ -512,39 +526,43 @@ sealed class SafDirectoryTool(
                 }
 
                 is FirewallDecision.RequiresBiometric -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "Biometric confirmation required for SAF write target: $targetDocUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = true,
-                        hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
-                    )
+                    if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "Biometric confirmation required for SAF write target: $targetDocUriString",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
 
                 is FirewallDecision.RequiresConfirmation -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "User confirmation required for SAF write target: $targetDocUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = true
-                    )
+                    if (!userConfirmed) {
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "User confirmation required for SAF write target: $targetDocUriString",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = true
+                        )
+                    }
                 }
 
                 FirewallDecision.Authorized -> {
@@ -552,25 +570,27 @@ sealed class SafDirectoryTool(
                     val hasUntrusted = ToolArgumentReader.hasUntrustedArgument(arguments)
                     val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
                     if (hasUntrusted || hasVault) {
-                        val worst = ToolArgumentReader.worstProvenance(arguments)
-                        recordSafAudit(
-                            timestampMs = nowMs,
-                            treeUri = rawTreeUri,
-                            actionSummary = "Taint barrier: SAF write payload contains untrusted or vault content",
-                            provenance = worst,
-                            decision = "CONFIRMATION_REQUIRED"
-                        )
-                        return ToolResult.ConfirmationRequired(
-                            message = UserMessage(
-                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                                args = listOf(MessageArg.ProvenanceBadge(worst))
-                            ),
-                            pendingToolName = metadata.name,
-                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                            requiresBiometric = false,
-                            hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
-                        )
+                        if (!userConfirmed) {
+                            val worst = ToolArgumentReader.worstProvenance(arguments)
+                            recordSafAudit(
+                                timestampMs = nowMs,
+                                treeUri = rawTreeUri,
+                                actionSummary = "Taint barrier: SAF write payload contains untrusted or vault content",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                            return ToolResult.ConfirmationRequired(
+                                message = UserMessage(
+                                    key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                    args = listOf(MessageArg.ProvenanceBadge(worst))
+                                ),
+                                pendingToolName = metadata.name,
+                                targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                                canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                                requiresBiometric = false,
+                                hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                            )
+                        }
                     }
                 }
             }
@@ -746,6 +766,10 @@ sealed class SafDirectoryTool(
                 uriOrTarget = taintedTargetDocUri
             )
 
+            val userConfirmed = context.isUserConfirmed && !context.isUnattendedBackground
+            val bioApproved = context.isBiometricApproved && !context.isUnattendedBackground
+            val hasUntrustedHighRisk = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
+
             when (firewallDecision) {
                 is FirewallDecision.Denied -> {
                     recordSafAudit(
@@ -762,64 +786,70 @@ sealed class SafDirectoryTool(
                 }
 
                 is FirewallDecision.RequiresBiometric -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "Biometric confirmation required for SAF delete target: $targetDocUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "BIOMETRIC_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = true,
-                        hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
-                    )
+                    if (!bioApproved || (hasUntrustedHighRisk && !userConfirmed)) {
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "Biometric confirmation required for SAF delete target: $targetDocUriString",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "BIOMETRIC_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = true,
+                            hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                        )
+                    }
                 }
 
                 is FirewallDecision.RequiresConfirmation -> {
-                    recordSafAudit(
-                        timestampMs = nowMs,
-                        treeUri = rawTreeUri,
-                        actionSummary = "User confirmation required for SAF delete target: $targetDocUriString",
-                        provenance = ToolArgumentReader.worstProvenance(arguments),
-                        decision = "CONFIRMATION_REQUIRED"
-                    )
-                    return ToolResult.ConfirmationRequired(
-                        message = firewallDecision.message,
-                        pendingToolName = metadata.name,
-                        targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                        canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                        requiresBiometric = false,
-                        hasUntrustedHighRiskSlot = true
-                    )
+                    if (!userConfirmed) {
+                        recordSafAudit(
+                            timestampMs = nowMs,
+                            treeUri = rawTreeUri,
+                            actionSummary = "User confirmation required for SAF delete target: $targetDocUriString",
+                            provenance = ToolArgumentReader.worstProvenance(arguments),
+                            decision = "CONFIRMATION_REQUIRED"
+                        )
+                        return ToolResult.ConfirmationRequired(
+                            message = firewallDecision.message,
+                            pendingToolName = metadata.name,
+                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                            requiresBiometric = false,
+                            hasUntrustedHighRiskSlot = true
+                        )
+                    }
                 }
 
                 FirewallDecision.Authorized -> {
                     val hasUntrusted = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted || ToolArgumentReader.hasUntrustedArgument(arguments)
                     val hasVault = ToolArgumentReader.hasVaultSourceArgument(arguments)
                     if (hasUntrusted || hasVault) {
-                        val worst = ToolArgumentReader.worstProvenance(arguments)
-                        recordSafAudit(
-                            timestampMs = nowMs,
-                            treeUri = rawTreeUri,
-                            actionSummary = "Confirmation required for SAF delete with untrusted/vault arguments: $targetDocUriString (worstProvenance=$worst)",
-                            provenance = worst,
-                            decision = "CONFIRMATION_REQUIRED"
-                        )
-                        return ToolResult.ConfirmationRequired(
-                            message = UserMessage(
-                                key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
-                                args = listOf(MessageArg.ProvenanceBadge(worst))
-                            ),
-                            pendingToolName = metadata.name,
-                            targetId = ToolTargetIds.forSafTree(rawTreeUri),
-                            canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
-                            requiresBiometric = false,
-                            hasUntrustedHighRiskSlot = treeUriTainted.isUntrusted || fileNameTainted.isUntrusted
-                        )
+                        if (!userConfirmed) {
+                            val worst = ToolArgumentReader.worstProvenance(arguments)
+                            recordSafAudit(
+                                timestampMs = nowMs,
+                                treeUri = rawTreeUri,
+                                actionSummary = "Confirmation required for SAF delete with untrusted/vault arguments: $targetDocUriString (worstProvenance=$worst)",
+                                provenance = worst,
+                                decision = "CONFIRMATION_REQUIRED"
+                            )
+                            return ToolResult.ConfirmationRequired(
+                                message = UserMessage(
+                                    key = MessageKey.WARNING_UNTRUSTED_EXTERNAL_SOURCE,
+                                    args = listOf(MessageArg.ProvenanceBadge(worst))
+                                ),
+                                pendingToolName = metadata.name,
+                                targetId = ToolTargetIds.forSafTree(rawTreeUri),
+                                canonicalArguments = ToolArgumentReader.toCanonicalDisplayMap(arguments),
+                                requiresBiometric = false,
+                                hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                            )
+                        }
                     }
                 }
             }
