@@ -23,6 +23,7 @@ import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.UserMessage
 import com.nava.feature.automations.common.AndroidAutomationNotificationBridge
 import com.nava.feature.automations.common.AutomationNotificationBridge
+import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.CompletionNotificationRequest
 import com.nava.feature.automations.common.InteractiveNotificationRequest
 import com.nava.feature.automations.common.ToolTargetIds
@@ -154,7 +155,7 @@ class RoutineExecutor(
                 return escalateToInteractive(
                     grant = grant,
                     requiresBiometric = firewallDecision is FirewallDecision.RequiresBiometric ||
-                        grant.staticActions.any { it.requiresBiometric },
+                        grant.staticActions.any { it.requiresBiometric || it.toolName in AutomationToolNames.VAULT_TOOLS },
                     nowEpochMs = nowEpochMs,
                     completedSteps = emptyList()
                 )
@@ -168,7 +169,7 @@ class RoutineExecutor(
         if (grant.requiresInteractiveUpgrade) {
             return escalateToInteractive(
                 grant = grant,
-                requiresBiometric = grant.staticActions.any { it.requiresBiometric },
+                requiresBiometric = grant.staticActions.any { it.requiresBiometric || it.toolName in AutomationToolNames.VAULT_TOOLS },
                 nowEpochMs = nowEpochMs,
                 completedSteps = emptyList()
             )
@@ -200,15 +201,39 @@ class RoutineExecutor(
             }
 
             if (action.requiresInteractiveConfirmation ||
+                action.requiresBiometric ||
+                action.toolName in AutomationToolNames.VAULT_TOOLS ||
                 action.requiredCapability == AtomicCapability.MODIFY_DELETE_SEND ||
                 tool.metadata.requiredCapability == AtomicCapability.MODIFY_DELETE_SEND ||
                 !tool.metadata.supportsUnattendedRule
             ) {
                 return escalateToInteractive(
                     grant = grant,
-                    requiresBiometric = action.requiresBiometric,
+                    requiresBiometric = action.requiresBiometric || action.toolName in AutomationToolNames.VAULT_TOOLS,
                     nowEpochMs = nowEpochMs,
                     completedSteps = emptyList()
+                )
+            }
+
+            if (action.requiredCapability != tool.metadata.requiredCapability) {
+                val reasonCode = "CAPABILITY_MISMATCH"
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowEpochMs,
+                        toolName = action.toolName,
+                        targetId = ToolTargetIds.ROUTINES,
+                        actionSummary = "Security violation: capability mismatch for tool ${action.toolName} in routine $ruleId: spec=${action.requiredCapability}, metadata=${tool.metadata.requiredCapability}",
+                        provenance = DataProvenance.SYSTEM,
+                        decision = "DENIED"
+                    )
+                )
+                return RoutineExecutionOutcome.Denied(
+                    ruleId = ruleId,
+                    reasonCode = reasonCode,
+                    message = UserMessage(
+                        key = MessageKey.ROUTINE_EXECUTION_DENIED,
+                        args = listOf(MessageArg.Text(reasonCode))
+                    )
                 )
             }
             resolvedTools.add(action to tool)
@@ -266,7 +291,7 @@ class RoutineExecutor(
                 is ToolResult.ConfirmationRequired -> {
                     return escalateToInteractive(
                         grant = grant,
-                        requiresBiometric = result.requiresBiometric,
+                        requiresBiometric = result.requiresBiometric || action.requiresBiometric || action.toolName in AutomationToolNames.VAULT_TOOLS,
                         nowEpochMs = nowEpochMs,
                         completedSteps = completedSteps
                     )
@@ -343,9 +368,11 @@ class RoutineExecutor(
         nowEpochMs: Long,
         completedSteps: List<ToolResult.Success>
     ): RoutineExecutionOutcome.EscalatedToInteractive {
+        val effectiveBiometric = requiresBiometric ||
+            grant.staticActions.any { it.requiresBiometric || it.toolName in AutomationToolNames.VAULT_TOOLS }
         val pendingToolNames = grant.staticActions.map { it.toolName }
         val message = UserMessage(
-            key = if (requiresBiometric) {
+            key = if (effectiveBiometric) {
                 MessageKey.ROUTINE_ESCALATED_BIOMETRIC
             } else {
                 MessageKey.ROUTINE_ESCALATED_CONFIRMATION
@@ -360,13 +387,13 @@ class RoutineExecutor(
             pendingToolNames = pendingToolNames,
             targetId = ToolTargetIds.ROUTINES,
             message = message,
-            requiresBiometric = requiresBiometric,
+            requiresBiometric = effectiveBiometric,
             hasUntrustedHighRiskSlot = false,
             ruleId = grant.ruleId
         )
         notificationBridge.postInteractiveConfirmationNotification(request)
 
-        val decision = if (requiresBiometric) "ESCALATED_BIOMETRIC" else "ESCALATED_CONFIRMATION"
+        val decision = if (effectiveBiometric) "ESCALATED_BIOMETRIC" else "ESCALATED_CONFIRMATION"
         auditLog.record(
             AuditLogEntry(
                 timestampEpochMs = nowEpochMs,
@@ -380,7 +407,7 @@ class RoutineExecutor(
 
         return RoutineExecutionOutcome.EscalatedToInteractive(
             ruleId = grant.ruleId,
-            requiresBiometric = requiresBiometric,
+            requiresBiometric = effectiveBiometric,
             pendingToolNames = pendingToolNames,
             message = message,
             completedSteps = completedSteps

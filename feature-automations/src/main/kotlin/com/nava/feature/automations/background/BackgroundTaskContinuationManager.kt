@@ -59,16 +59,40 @@ class BackgroundTaskContinuationManager(
         request: BackgroundTaskRequest,
         nowEpochMs: Long
     ): BackgroundTaskOutcome {
-        taskRequests[request.taskId] = request
-        taskStatuses[request.taskId] = BackgroundTaskStatus.RUNNING
+        synchronized(taskStatuses) {
+            if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
+                    ?: BackgroundTaskOutcome.Cancelled(
+                        taskId = request.taskId,
+                        message = UserMessage(
+                            key = MessageKey.BACKGROUND_TASK_CANCELLED,
+                            args = listOf(MessageArg.Text(request.taskId))
+                        )
+                    )
+            }
+            taskRequests[request.taskId] = request
+            taskStatuses[request.taskId] = BackgroundTaskStatus.RUNNING
+        }
 
         val outcome: BackgroundTaskOutcome = when (request) {
             is BackgroundTaskRequest.PlanContinuation -> executePlanContinuation(request, nowEpochMs)
             is BackgroundTaskRequest.ModelImportContinuation -> executeModelImportContinuation(request, nowEpochMs)
         }
 
-        taskOutcomes[request.taskId] = outcome
-        taskStatuses[request.taskId] = outcome.status
+        synchronized(taskStatuses) {
+            if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
+                    ?: BackgroundTaskOutcome.Cancelled(
+                        taskId = request.taskId,
+                        message = UserMessage(
+                            key = MessageKey.BACKGROUND_TASK_CANCELLED,
+                            args = listOf(MessageArg.Text(request.taskId))
+                        )
+                    )
+            }
+            taskOutcomes[request.taskId] = outcome
+            taskStatuses[request.taskId] = outcome.status
+        }
         return outcome
     }
 
@@ -82,7 +106,7 @@ class BackgroundTaskContinuationManager(
 
     override suspend fun cancel(taskId: String) {
         scheduler.cancel(taskId)
-        taskStatuses[taskId] = BackgroundTaskStatus.CANCELLED
+        AutomationWorkerRegistry.unregisterRequest(taskId)
         val cancelledOutcome = BackgroundTaskOutcome.Cancelled(
             taskId = taskId,
             message = UserMessage(
@@ -90,7 +114,10 @@ class BackgroundTaskContinuationManager(
                 args = listOf(MessageArg.Text(taskId))
             )
         )
-        taskOutcomes[taskId] = cancelledOutcome
+        synchronized(taskStatuses) {
+            taskStatuses[taskId] = BackgroundTaskStatus.CANCELLED
+            taskOutcomes[taskId] = cancelledOutcome
+        }
         auditLog.record(
             AuditLogEntry(
                 timestampEpochMs = System.currentTimeMillis(),
@@ -134,6 +161,18 @@ class BackgroundTaskContinuationManager(
                 }
 
                 is ToolResult.ConfirmationRequired -> {
+                    synchronized(taskStatuses) {
+                        if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                            return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
+                                ?: BackgroundTaskOutcome.Cancelled(
+                                    taskId = request.taskId,
+                                    message = UserMessage(
+                                        key = MessageKey.BACKGROUND_TASK_CANCELLED,
+                                        args = listOf(MessageArg.Text(request.taskId))
+                                    )
+                                )
+                        }
+                    }
                     val notifId = AndroidAutomationNotificationBridge.stableNotificationId("bg_confirm:${request.taskId}")
                     val notifReq = InteractiveNotificationRequest(
                         notificationId = notifId,
@@ -191,6 +230,18 @@ class BackgroundTaskContinuationManager(
         }
 
         // All steps succeeded safely (Auto)
+        synchronized(taskStatuses) {
+            if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
+                    ?: BackgroundTaskOutcome.Cancelled(
+                        taskId = request.taskId,
+                        message = UserMessage(
+                            key = MessageKey.BACKGROUND_TASK_CANCELLED,
+                            args = listOf(MessageArg.Text(request.taskId))
+                        )
+                    )
+            }
+        }
         val completionMessage = UserMessage(
             key = MessageKey.BACKGROUND_TASK_COMPLETED,
             args = listOf(MessageArg.Text(request.taskId))
@@ -249,6 +300,18 @@ class BackgroundTaskContinuationManager(
         }
 
         if (importSuccess) {
+            synchronized(taskStatuses) {
+                if (taskStatuses[request.taskId] == BackgroundTaskStatus.CANCELLED) {
+                    return taskOutcomes[request.taskId] as? BackgroundTaskOutcome.Cancelled
+                        ?: BackgroundTaskOutcome.Cancelled(
+                            taskId = request.taskId,
+                            message = UserMessage(
+                                key = MessageKey.BACKGROUND_TASK_CANCELLED,
+                                args = listOf(MessageArg.Text(request.taskId))
+                            )
+                        )
+                }
+            }
             val completionMessage = UserMessage(
                 key = MessageKey.BACKGROUND_TASK_COMPLETED,
                 args = listOf(MessageArg.Text(request.expectedModelId))
