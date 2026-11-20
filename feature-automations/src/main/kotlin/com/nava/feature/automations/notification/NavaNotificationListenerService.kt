@@ -11,6 +11,7 @@ import com.nava.domain.security.Gemma4InputSanitizer
 import com.nava.domain.security.PermissionEvaluatorPort
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.feature.automations.common.ToolTargetIds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +48,8 @@ class NotificationIngestionFilter(
         val targetId = ToolTargetIds.forPackage(packageName)
         val level = try {
             permissionEvaluator.evaluateCapability(targetId, AtomicCapability.NOTIFICATION_READ)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             ConfirmationLevel.DISABLED
         }

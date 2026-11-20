@@ -1,6 +1,8 @@
 package com.nava.feature.automations.background
 
 import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -10,6 +12,7 @@ import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.UserMessage
 import com.nava.feature.automations.common.AndroidAutomationNotificationBridge
 import com.nava.feature.automations.routine.AutomationWorkerRegistry
+import kotlinx.coroutines.CancellationException
 
 /**
  * Android [CoroutineWorker] continuing long-running user-initiated tasks in foreground WorkManager.
@@ -37,9 +40,19 @@ class BackgroundTaskContinuationWorker(
                 )
             )
             val notification = bridge.buildForegroundNotification(spec)
-            val foregroundInfo = ForegroundInfo(spec.notificationId, notification)
+            val foregroundInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ForegroundInfo(
+                    spec.notificationId,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                ForegroundInfo(spec.notificationId, notification)
+            }
             try {
                 setForeground(foregroundInfo)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // Ignore foreground exception if platform restriction prevents promoting to foreground
             }

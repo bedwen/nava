@@ -398,6 +398,58 @@ class RoutineExecutorTest {
         AutomationWorkerRegistry.unbind()
         assertNull(AutomationWorkerRegistry.getRoutineExecutor())
     }
+
+    @Test
+    fun routineExecutionEscalationDropsAlreadyExecutedStepsFromPendingToolNames() = runBlocking {
+        toolRegistry.register(
+            FakeTool(
+                name = "confirm_action",
+                requiredCapability = AtomicCapability.CREATE_DRAFT,
+                supportsUnattendedRule = true,
+                result = ToolResult.ConfirmationRequired(
+                    message = UserMessage(MessageKey.ACTION_CONFIRMATION_REQUIRED),
+                    pendingToolName = "confirm_action",
+                    targetId = com.nava.feature.automations.common.ToolTargetIds.ROUTINES,
+                    canonicalArguments = emptyMap(),
+                    requiresBiometric = false,
+                    hasUntrustedHighRiskSlot = false,
+                    pendingOrderIndex = 1
+                )
+            )
+        )
+        toolRegistry.register(
+            FakeTool(
+                name = "trailing_action",
+                requiredCapability = AtomicCapability.CREATE_DRAFT,
+                supportsUnattendedRule = true
+            )
+        )
+
+        val grant = RuleCapabilityGrant(
+            grantId = "grant_multi",
+            ruleId = "rule_multi",
+            triggerSpec = RuleTriggerSpec("interval"),
+            staticActions = listOf(
+                RuleActionSpec(toolName = "set_alarm", requiredCapability = AtomicCapability.CREATE_DRAFT),
+                RuleActionSpec(toolName = "confirm_action", requiredCapability = AtomicCapability.CREATE_DRAFT),
+                RuleActionSpec(toolName = "trailing_action", requiredCapability = AtomicCapability.CREATE_DRAFT)
+            ),
+            approvalState = RuleApprovalState.APPROVED_ACTIVE,
+            sealHmacHex = "validhmac"
+        )
+        fakeRuleGrantPort.putRule(grant)
+
+        val outcome = routineExecutor.executeRule("rule_multi", 1000L)
+        assertTrue(outcome is RoutineExecutionOutcome.EscalatedToInteractive)
+        val escalated = outcome as RoutineExecutionOutcome.EscalatedToInteractive
+
+        assertEquals(1, escalated.completedSteps.size)
+        assertEquals(listOf("confirm_action", "trailing_action"), escalated.pendingToolNames)
+
+        assertEquals(1, fakeNotificationBridge.interactiveRequests.size)
+        val notifReq = fakeNotificationBridge.interactiveRequests.first()
+        assertEquals(listOf("confirm_action", "trailing_action"), notifReq.pendingToolNames)
+    }
 }
 
 class FakeRuleGrantPort : RuleGrantPort {
@@ -531,7 +583,11 @@ class FakeNotificationBridge : AutomationNotificationBridge {
 class FakeTool(
     name: String,
     requiredCapability: AtomicCapability,
-    supportsUnattendedRule: Boolean
+    supportsUnattendedRule: Boolean,
+    private val result: ToolResult = ToolResult.Success(
+        message = UserMessage(MessageKey.ROUTINE_EXECUTED),
+        outputValues = mapOf("status" to "ok")
+    )
 ) : NavaTool {
     override val metadata: ToolMetadata = ToolMetadata(
         name = name,
@@ -546,10 +602,7 @@ class FakeTool(
         context: ToolExecutionContext,
         arguments: Map<String, Tainted<SlotValueAst>>
     ): ToolResult {
-        return ToolResult.Success(
-            message = UserMessage(MessageKey.ROUTINE_EXECUTED),
-            outputValues = mapOf("status" to "ok")
-        )
+        return result
     }
 }
 
