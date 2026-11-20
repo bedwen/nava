@@ -2,7 +2,7 @@
 
 > **Status: Work in Progress (Active Development)**
 >
-> Nava is currently under active development and is **not yet feature-complete or production-ready**. End-to-end execution has **not yet been tested on physical Android hardware**, and the automation tools and UI modules (Phases 4-5) are still pending implementation.
+> Nava is currently under active development and is **not yet feature-complete or production-ready**. End-to-end execution has **not yet been tested on physical Android hardware**, and the application UI and composition root (`:app`, Phase 5) are still pending implementation.
 
 ---
 
@@ -22,8 +22,8 @@ Its core goal is to provide fast, private on-device automation without cloud dep
 | **Phase 1** | 5-Module Gradle Skeleton, Gate 1 Guard (`scripts/verify_architecture.sh`), and `:domain` Pure Kotlin Contracts | `COMPLETED` |
 | **Phase 2** | `:core-security-data` (Keystore `AES-256-GCM`, `EncryptedSqliteStore`, `Nava Vault`, `PermissionProfile`, `RuleCapabilityGrant`, `AuditLogDao`, `BlindSlotExtractor`, `SecurityFirewall`, Gate 2 red-team suites) | `COMPLETED` |
 | **Phase 3** | `:core-ai` (3-Tier Hybrid Router, `LiteRtLlmEngine`, `DynamicToolPruner`, `MicroDslParser`, `ThermalModelLifecycleManager`, SAF SHA-256 model provisioning, `OnDeviceLanguageDetector`, `SupportedLanguageCatalog`, seed Layer R rule packs, Gate 2 red-team suites) | `COMPLETED` |
-| **Phase 4** | `:feature-automations` (`NavaTool` adapters & `WorkManager` routine engine) | `NEXT` |
-| **Phase 5** | `:app` (`Dual-Core Neural Canvas`, MVI screens, Default-Deny Onboarding, `VoiceInteractionService` / `TileService`, `AppContainer`) | `PLANNED` |
+| **Phase 4** | `:feature-automations` (Atomic `NavaTool` adapters, `NavaNotificationListenerService`, `WorkManager` `RoutineExecutor` & `BackgroundTaskContinuationManager`, Gate 2 real-firewall red-team suites) | `COMPLETED` |
+| **Phase 5** | `:app` (`Dual-Core Neural Canvas`, MVI screens, Default-Deny Onboarding, `VoiceInteractionService` / `TileService`, `AppContainer`) | `NEXT` |
 
 ---
 
@@ -88,8 +88,8 @@ Run unit tests for implemented modules with:
 
 **IMPORTANT -- PLEASE READ CAREFULLY:**
 
-* **Development & Incomplete Status:** This project is in an early, active stage of development. The automation tools (`:feature-automations`) and application UI (`:app`) modules are not yet implemented.
-* **Not Tested End-to-End:** While unit and adversarial tests exist for completed modules (`:domain`, `:core-security-data`, `:core-ai`), the application as a whole has **not been built into a final release or tested end-to-end on physical Android hardware**, and no independent third-party security audit has been conducted.
+* **Development & Incomplete Status:** This project is in an early, active stage of development. The application UI and composition root (`:app`, Phase 5) are not yet implemented.
+* **Not Tested End-to-End:** While unit and adversarial tests exist for completed modules (`:domain`, `:core-security-data`, `:core-ai`, `:feature-automations`), the application as a whole has **not been built into a final release or tested end-to-end on physical Android hardware**, and no independent third-party security audit has been conducted.
 * **No Warranty / Use at Your Own Risk:** This software is provided **"AS IS"**, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, security, or non-infringement. Do **not** rely on this repository in production or for safeguarding critical or sensitive personal data while it remains under active development. In no event shall the authors or copyright holders be liable for any claim, damages, data loss, or other liability arising from the use of this software.
 
 ---
