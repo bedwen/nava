@@ -720,4 +720,239 @@ class ToolRegistryAndUseCaseTest {
             // Expected
         }
     }
+
+    @Test
+    fun `ToolExecutionContext defaults confirmation flags to false and rejects spoofing in unattended background`() {
+        val activeToken = CapabilityToken.mint(
+            tokenId = "tok-confirm",
+            requestId = "req-confirm",
+            allowedTools = setOf("audio.dnd"),
+            mintProvenance = DataProvenance.USER_UTTERANCE,
+            issuedAtEpochMs = 1000L
+        )
+        val activeGrant = RuleCapabilityGrant(
+            grantId = "grant-bg-1",
+            ruleId = "rule-bg-1",
+            triggerSpec = RuleTriggerSpec("CHARGING_AFTER_2300"),
+            staticActions = listOf(RuleActionSpec("audio.dnd", AtomicCapability.CREATE_DRAFT)),
+            approvalState = RuleApprovalState.APPROVED_ACTIVE,
+            sealHmacHex = "hmac-sealed-bg-1",
+            grantedAtEpochSec = 1000L
+        )
+
+        val interactiveDefault = ToolExecutionContext(
+            requestId = "req-confirm",
+            capabilityToken = activeToken,
+            ruleGrant = null,
+            targetId = "com.android.settings",
+            languageTag = "en-US",
+            issuedAtEpochMs = 2000L
+        )
+        assertFalse(interactiveDefault.isUnattendedBackground)
+        assertFalse(interactiveDefault.isUserConfirmed)
+        assertFalse(interactiveDefault.isBiometricApproved)
+
+        val backgroundDefault = ToolExecutionContext(
+            requestId = "req-bg-default",
+            capabilityToken = null,
+            ruleGrant = activeGrant,
+            targetId = "com.android.settings",
+            languageTag = "en-US",
+            issuedAtEpochMs = 2000L,
+            isUnattendedBackground = true
+        )
+        assertTrue(backgroundDefault.isUnattendedBackground)
+        assertFalse(backgroundDefault.isUserConfirmed)
+        assertFalse(backgroundDefault.isBiometricApproved)
+
+        val interactiveApproved = ToolExecutionContext(
+            requestId = "req-confirm",
+            capabilityToken = activeToken,
+            ruleGrant = null,
+            targetId = "com.android.settings",
+            languageTag = "en-US",
+            issuedAtEpochMs = 2000L,
+            isUnattendedBackground = false,
+            isUserConfirmed = true,
+            isBiometricApproved = true
+        )
+        assertTrue(interactiveApproved.isUserConfirmed)
+        assertTrue(interactiveApproved.isBiometricApproved)
+
+        try {
+            ToolExecutionContext(
+                requestId = "req-bg-spoof-confirm",
+                capabilityToken = null,
+                ruleGrant = activeGrant,
+                targetId = "com.android.settings",
+                languageTag = "en-US",
+                issuedAtEpochMs = 2000L,
+                isUnattendedBackground = true,
+                isUserConfirmed = true
+            )
+            fail("Expected IllegalArgumentException when unattended background claims isUserConfirmed")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+
+        try {
+            ToolExecutionContext(
+                requestId = "req-bg-spoof-biometric",
+                capabilityToken = null,
+                ruleGrant = activeGrant,
+                targetId = "com.android.settings",
+                languageTag = "en-US",
+                issuedAtEpochMs = 2000L,
+                isUnattendedBackground = true,
+                isBiometricApproved = true
+            )
+            fail("Expected IllegalArgumentException when unattended background claims isBiometricApproved")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+
+        try {
+            ToolExecutionContext(
+                requestId = "req-bg-spoof-both",
+                capabilityToken = null,
+                ruleGrant = activeGrant,
+                targetId = "com.android.settings",
+                languageTag = "en-US",
+                issuedAtEpochMs = 2000L,
+                isUnattendedBackground = true,
+                isUserConfirmed = true,
+                isBiometricApproved = true
+            )
+            fail("Expected IllegalArgumentException when unattended background claims both approval flags")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+    }
+
+    @Test
+    fun `ExecutePlanUseCase forwards confirmation and biometric approval flags to ToolExecutionContext`() = runBlocking {
+        val smsMeta = ToolMetadata(
+            name = "sms.draft",
+            displayNameKey = "tool_sms_draft",
+            description = "Prepares an SMS draft",
+            category = ToolCategory.COMMUNICATION,
+            requiredCapability = AtomicCapability.CREATE_DRAFT,
+            fields = listOf(
+                ToolSchemaField("recipient", "Phone number", true, SensitiveSlotKind.PHONE_NUMBER)
+            )
+        )
+        val capturedContexts = mutableListOf<ToolExecutionContext>()
+        val capturingTool = object : NavaTool {
+            override val metadata = smsMeta
+            override suspend fun execute(
+                context: ToolExecutionContext,
+                arguments: Map<String, Tainted<SlotValueAst>>
+            ): ToolResult {
+                capturedContexts.add(context)
+                return ToolResult.Success(UserMessage(MessageKey.ACTION_SMS_DRAFT_PREPARED))
+            }
+        }
+        val registry = ToolRegistry(listOf(capturingTool))
+        val auditLog = RecordingAuditLog()
+        val firewall = object : SecurityFirewallPort {
+            override suspend fun mintToken(
+                requestId: String,
+                utteranceProvenance: DataProvenance,
+                candidateTools: Set<String>,
+                nowEpochMs: Long
+            ) = CapabilityToken.mint("t", requestId, candidateTools, utteranceProvenance, nowEpochMs)
+
+            override suspend fun authorizeToolCall(
+                token: CapabilityToken,
+                toolCall: ToolCallAst,
+                toolMetadata: ToolMetadata,
+                targetId: String,
+                nowEpochMs: Long
+            ) = FirewallDecision.Authorized
+
+            override suspend fun authorizeRuleExecution(grant: RuleCapabilityGrant) = FirewallDecision.Authorized
+
+            override suspend fun validateOutboundTarget(
+                toolName: String,
+                action: String,
+                uriOrTarget: Tainted<String>
+            ) = FirewallDecision.Authorized
+        }
+        val useCase = ExecutePlanUseCase(registry, firewall, auditLog)
+        val token = CapabilityToken.mint(
+            tokenId = "tok-fwd",
+            requestId = "req-fwd",
+            allowedTools = setOf("sms.draft"),
+            mintProvenance = DataProvenance.USER_UTTERANCE,
+            issuedAtEpochMs = 1000L,
+            maxToolCalls = 2
+        )
+        val trustedPlan = PlanAst(
+            planId = "plan-fwd-trusted",
+            calls = listOf(
+                ToolCallAst(
+                    toolName = "sms.draft",
+                    arguments = mapOf(
+                        "recipient" to Tainted.fromUserUtterance(
+                            SlotValueAst.StringValue("+15550100"),
+                            SensitiveSlotKind.PHONE_NUMBER
+                        )
+                    ),
+                    orderIndex = 0
+                )
+            )
+        )
+
+        // Default run: neither flag set.
+        val defaultRes = useCase(
+            plan = trustedPlan,
+            capabilityToken = token,
+            targetId = "system.sms",
+            languageTag = "en-US",
+            nowEpochMs = 1100L
+        )
+        assertTrue(defaultRes.single() is ToolResult.Success)
+        assertFalse(capturedContexts.last().isUserConfirmed)
+        assertFalse(capturedContexts.last().isBiometricApproved)
+
+        // Confirmed step only.
+        val confirmedRes = useCase(
+            plan = trustedPlan,
+            capabilityToken = token,
+            targetId = "system.sms",
+            languageTag = "en-US",
+            nowEpochMs = 1200L,
+            confirmedStepIndices = setOf(0)
+        )
+        assertTrue(confirmedRes.single() is ToolResult.Success)
+        assertTrue(capturedContexts.last().isUserConfirmed)
+        assertFalse(capturedContexts.last().isBiometricApproved)
+
+        // Biometric approved step only.
+        val biometricRes = useCase(
+            plan = trustedPlan,
+            capabilityToken = token,
+            targetId = "system.sms",
+            languageTag = "en-US",
+            nowEpochMs = 1300L,
+            biometricApprovedStepIndices = setOf(0)
+        )
+        assertTrue(biometricRes.single() is ToolResult.Success)
+        assertFalse(capturedContexts.last().isUserConfirmed)
+        assertTrue(capturedContexts.last().isBiometricApproved)
+
+        // Both confirmed and biometric approved.
+        val bothRes = useCase(
+            plan = trustedPlan,
+            capabilityToken = token,
+            targetId = "system.sms",
+            languageTag = "en-US",
+            nowEpochMs = 1400L,
+            confirmedStepIndices = setOf(0),
+            biometricApprovedStepIndices = setOf(0)
+        )
+        assertTrue(bothRes.single() is ToolResult.Success)
+        assertTrue(capturedContexts.last().isUserConfirmed)
+        assertTrue(capturedContexts.last().isBiometricApproved)
+    }
 }

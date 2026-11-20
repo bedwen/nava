@@ -16,7 +16,9 @@ data class ToolExecutionContext(
     val targetId: String,
     val languageTag: String,
     val issuedAtEpochMs: Long,
-    val isUnattendedBackground: Boolean = false
+    val isUnattendedBackground: Boolean = false,
+    val isUserConfirmed: Boolean = false,
+    val isBiometricApproved: Boolean = false
 ) {
     init {
         require(requestId.isNotBlank()) { "requestId must not be blank" }
@@ -28,6 +30,9 @@ data class ToolExecutionContext(
             }
             require(ruleGrant != null && ruleGrant.canExecuteUnattended()) {
                 "Unattended background execution requires an active, safe RuleCapabilityGrant"
+            }
+            require(!isUserConfirmed && !isBiometricApproved) {
+                "Unattended background execution cannot claim interactive user confirmation or biometric approval"
             }
         } else {
             require(capabilityToken != null) {
