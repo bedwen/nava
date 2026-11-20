@@ -207,7 +207,9 @@ class ExecutePlanUseCase(
                 targetId = stepTargetId,
                 languageTag = languageTag,
                 issuedAtEpochMs = nowEpochMs,
-                isUnattendedBackground = false
+                isUnattendedBackground = false,
+                isUserConfirmed = stepConfirmed,
+                isBiometricApproved = stepBiometric
             )
             val result = tool.execute(context, call.arguments)
             val outcomeCode = when (result) {
