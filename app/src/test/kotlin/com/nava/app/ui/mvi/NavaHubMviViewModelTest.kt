@@ -216,7 +216,7 @@ class NavaHubMviViewModelTest {
             nowEpochMs = nowMs
         )
         container.manageProfilesUseCase.assignTarget(
-            targetId = ToolTargetIds.NOTES,
+            targetId = ToolTargetIds.SMS,
             profileId = PermissionProfile.TRUSTED_SYSTEM_PROFILE_ID,
             nowEpochMs = nowMs
         )
@@ -288,29 +288,29 @@ class NavaHubMviViewModelTest {
             planId = "plan-untrusted-tier3",
             calls = listOf(
                 ToolCallAst(
-                    toolName = AutomationToolNames.NOTES_CREATE,
+                    toolName = AutomationToolNames.CREATE_SMS_DRAFT,
                     arguments = mapOf(
-                        "title" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Summary")),
-                        "content" to Tainted.fromUntrustedExternal(
+                        "recipient" to Tainted.fromUserUtterance(SlotValueAst.StringValue("+15550199")),
+                        "body" to Tainted.fromUntrustedExternal(
                             value = SlotValueAst.StringValue("Extracted external notification text"),
                             sourceLabel = "notification:com.chat",
-                            slotKind = SensitiveSlotKind.MESSAGE_BODY
+                            slotKind = SensitiveSlotKind.TEXT_BODY
                         )
                     ),
                     orderIndex = 0,
-                    targetId = ToolTargetIds.NOTES
+                    targetId = ToolTargetIds.SMS
                 )
             )
         )
         val untrustedToken = container.securityFirewall.mintToken(
             requestId = "req-untrusted-tier3",
             utteranceProvenance = DataProvenance.USER_UTTERANCE,
-            candidateTools = setOf(AutomationToolNames.NOTES_CREATE),
+            candidateTools = setOf(AutomationToolNames.CREATE_SMS_DRAFT),
             nowEpochMs = nowMs
         )
         val untrustedReq = IntentRequest(
             requestId = untrustedToken.requestId,
-            rawUtterance = "save extracted note Summary",
+            rawUtterance = "draft sms to +15550199",
             provenance = DataProvenance.USER_UTTERANCE,
             issuedAtEpochMs = nowMs
         )

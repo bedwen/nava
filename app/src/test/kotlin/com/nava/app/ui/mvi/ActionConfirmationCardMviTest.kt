@@ -81,12 +81,12 @@ class ActionConfirmationCardMviTest {
                     arguments = mapOf(
                         "recipient" to Tainted.fromUserUtterance(
                             value = SlotValueAst.StringValue("+1 555-0199"),
-                            slotKind = SensitiveSlotKind.RECIPIENT
+                            slotKind = SensitiveSlotKind.RECIPIENT_ADDRESS
                         ),
                         "body" to Tainted.fromUntrustedExternal(
                             value = SlotValueAst.StringValue("Transfer 500 USD"),
                             sourceLabel = "notification:com.bank",
-                            slotKind = SensitiveSlotKind.MESSAGE_BODY
+                            slotKind = SensitiveSlotKind.TEXT_BODY
                         )
                     ),
                     orderIndex = 0,
