@@ -21,7 +21,7 @@
     <string name="msg_action_confirmation_required">Se requiere confirmación para %1$s</string>
     <string name="msg_action_biometric_required">Se requiere autenticación biométrica para %1$s</string>
     <string name="msg_warning_untrusted_external_source">Advertencia: Fuente externa no confiable (%1$s)</string>
-    <string name="msg_error_permission_denied">Permiso denegado: %1$s</string>
+    <string name="msg_error_permission_denied">Permiso denegado para %1$s (%2$s)</string>
     <string name="msg_error_tool_not_found">Herramienta no encontrada: %1$s</string>
     <string name="msg_error_security_violation">Violación de seguridad: %1$s</string>
     <string name="msg_error_model_unavailable">El modelo de lenguaje en el dispositivo no está disponible</string>
@@ -40,7 +40,7 @@
     <string name="msg_action_vault_note_read">Nota cifrada leída de la Bóveda: %1$s</string>
     <string name="msg_action_vault_note_deleted">Nota cifrada eliminada de la Bóveda: %1$s</string>
     <string name="msg_action_direct_call_initiated">Llamada iniciada a %1$s</string>
-    <string name="msg_action_volume_updated">Volumen actualizado para el flujo %1$s</string>
+    <string name="msg_action_volume_updated">Volumen de %1$s actualizado al %2$s%%</string>
     <string name="msg_action_app_launched">Aplicación iniciada: %1$s</string>
     <string name="msg_action_notifications_summarized">Se resumieron %1$s notificaciones</string>
     <string name="msg_action_notifications_empty">No hay notificaciones nuevas para resumir</string>

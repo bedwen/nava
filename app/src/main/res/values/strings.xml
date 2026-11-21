@@ -21,7 +21,7 @@
     <string name="msg_action_confirmation_required">Confirmation required for %1$s</string>
     <string name="msg_action_biometric_required">Biometric authentication required for %1$s</string>
     <string name="msg_warning_untrusted_external_source">Warning: Untrusted external source (%1$s)</string>
-    <string name="msg_error_permission_denied">Permission denied: %1$s</string>
+    <string name="msg_error_permission_denied">Permission denied for %1$s (%2$s)</string>
     <string name="msg_error_tool_not_found">Automation tool not found: %1$s</string>
     <string name="msg_error_security_violation">Security violation: %1$s</string>
     <string name="msg_error_model_unavailable">On-device language model is unavailable</string>
@@ -40,7 +40,7 @@
     <string name="msg_action_vault_note_read">Read encrypted note from Vault: %1$s</string>
     <string name="msg_action_vault_note_deleted">Deleted encrypted note from Vault: %1$s</string>
     <string name="msg_action_direct_call_initiated">Initiated call to %1$s</string>
-    <string name="msg_action_volume_updated">Volume updated for stream %1$s</string>
+    <string name="msg_action_volume_updated">Volume for %1$s updated to %2$s%%</string>
     <string name="msg_action_app_launched">Launched application: %1$s</string>
     <string name="msg_action_notifications_summarized">Summarized %1$s notifications</string>
     <string name="msg_action_notifications_empty">No new notifications to summarize</string>

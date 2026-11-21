@@ -21,7 +21,7 @@
     <string name="msg_action_confirmation_required">Confirmation requise pour %1$s</string>
     <string name="msg_action_biometric_required">Authentification biométrique requise pour %1$s</string>
     <string name="msg_warning_untrusted_external_source">Avertissement : Source externe non fiable (%1$s)</string>
-    <string name="msg_error_permission_denied">Autorisation refusée : %1$s</string>
+    <string name="msg_error_permission_denied">Autorisation refusée pour %1$s (%2$s)</string>
     <string name="msg_error_tool_not_found">Outil d\'automatisation introuvable : %1$s</string>
     <string name="msg_error_security_violation">Violation de sécurité : %1$s</string>
     <string name="msg_error_model_unavailable">Le modèle de langage sur l\'appareil est indisponible</string>
@@ -40,7 +40,7 @@
     <string name="msg_action_vault_note_read">Note chiffrée lue depuis le Coffre-fort : %1$s</string>
     <string name="msg_action_vault_note_deleted">Note chiffrée supprimée du Coffre-fort : %1$s</string>
     <string name="msg_action_direct_call_initiated">Appel initié vers %1$s</string>
-    <string name="msg_action_volume_updated">Volume mis à jour pour le flux %1$s</string>
+    <string name="msg_action_volume_updated">Volume de %1$s mis à jour à %2$s%%</string>
     <string name="msg_action_app_launched">Application lancée : %1$s</string>
     <string name="msg_action_notifications_summarized">%1$s notifications résumées</string>
     <string name="msg_action_notifications_empty">Aucune nouvelle notification à résumer</string>
