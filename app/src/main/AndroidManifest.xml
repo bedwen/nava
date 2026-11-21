@@ -3,11 +3,61 @@
 
     <!-- Zero-Trust: Network and all-files storage permissions are strictly forbidden. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
+        android:name=".di.NavaApplication"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar" />
+        android:localeConfig="@xml/locales_config"
+        android:theme="@style/Theme.Nava">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".assistant.NavaAssistantSheetActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Nava.Sheet"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop" />
+
+        <service
+            android:name=".assistant.NavaVoiceInteractionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/nava_voice_interaction_service" />
+        </service>
+
+        <service
+            android:name=".assistant.NavaVoiceInteractionSessionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="false" />
+
+        <service
+            android:name=".assistant.NavaQuickSettingsTileService"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true"
+            android:label="@string/tile_assistant_label">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+    </application>
 
 </manifest>
