@@ -59,12 +59,13 @@ import java.util.Locale
 fun PermissionProfilesScreen(
     viewModel: PermissionProfilesViewModel,
     bidiFormatter: BidiTextFormatter,
+    activeLocale: Locale = Locale.forLanguageTag("en"),
     initialFocusedTargetId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    val locale = Locale.getDefault()
+    val locale = activeLocale
 
     LaunchedEffect(initialFocusedTargetId) {
         if (!initialFocusedTargetId.isNullOrBlank()) {

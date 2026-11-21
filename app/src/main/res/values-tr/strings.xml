@@ -72,7 +72,7 @@
     <string name="nav_profile">Güvenlik Profili</string>
     <string name="hub_title">Çift Çekirdekli Nöral Merkez</string>
     <string name="hub_subtitle">Çevrimdışı Gemma 4 cihaz içi yapay zeka</string>
-    <string name="hub_status_idle">0 FPS modunda beklemede (%0 CPU/GPU)</string>
+    <string name="hub_status_idle" formatted="false">0 FPS modunda beklemede (%0 CPU/GPU)</string>
     <string name="hub_status_active">Nöral istek işleniyor</string>
     <string name="hub_status_outer_shell">Dış Korteks aktif (Aşama 1/2 refleksi)</string>
     <string name="hub_status_inner_core">İç Çekirdek aktif (Aşama 3 Gemma 4 akıl yürütme)</string>
@@ -100,7 +100,7 @@
     <string name="confirm_tool_label">İşlem: %1$s</string>
     <string name="confirm_target_label">Hedef: %1$s</string>
     <string name="onboarding_title">Nava\'ya Hoş Geldiniz</string>
-    <string name="onboarding_subtitle">%100 Çevrimdışı, Sıfır Güven Gizlilik Asistanı</string>
+    <string name="onboarding_subtitle" formatted="false">%100 Çevrimdışı, Sıfır Güven Gizlilik Asistanı</string>
     <string name="onboarding_default_deny_title">Varsayılan Olarak Reddet Güvenlik Mimarisi</string>
     <string name="onboarding_default_deny_description">Nava tüm izinler tamamen engellenmiş olarak başlar. Güvenlik profilinizde açıkça izin verilene kadar hiçbir uygulamaya, bildirime veya dizine erişilemez.</string>
     <string name="onboarding_zero_network_title">Sıfır İnternet İzni</string>
@@ -179,7 +179,7 @@
     <string name="voice_idle">Konuşmak için mikrofona dokunun</string>
     <string name="voice_mic_permission_missing">Sesli etkileşim için mikrofon izni gereklidir.</string>
     <string name="voice_pack_missing_warning">Çevrimdışı konuşma tanıma ses paketi bu cihazda yüklü değil.</string>
-    <string name="voice_offline_pack_missing_desc">%100 çevrimdışı ses girişini etkinleştirmek için lütfen Android Sistem Ayarları\'ndan çevrimdışı dil tanıma paketini indirin.</string>
+    <string name="voice_offline_pack_missing_desc" formatted="false">%100 çevrimdışı ses girişini etkinleştirmek için lütfen Android Sistem Ayarları\'ndan çevrimdışı dil tanıma paketini indirin.</string>
     <string name="voice_service_not_active">Nava varsayılan sesli asistan hizmetiniz olarak ayarlanmamış.</string>
     <string name="audit_title">Güvenlik Denetim Günlüğü</string>
     <string name="audit_subtitle">Tüm sistem kararlarının ve araç yürütmelerinin tahrifata dayanıklı kaydı</string>

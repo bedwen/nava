@@ -164,6 +164,12 @@ class SettingsViewModel(
             val selectedModelId = container.onboardingStateStore.getSelectedModelId()
             val vaultUnlocked = container.vaultBiometricController.refreshUnlockState()
             val auditEntries = container.auditLogDao.queryRecent(DEFAULT_AUDIT_LOG_LIMIT)
+            val isNotifListenerEnabled = runCatching {
+                container.intentGateway.isNotificationListenerEnabled()
+            }.getOrDefault(false)
+            val isNotifPolicyGranted = runCatching {
+                container.intentGateway.isNotificationPolicyAccessGranted()
+            }.getOrDefault(false)
 
             _uiState.update { state ->
                 state.copy(
@@ -176,7 +182,9 @@ class SettingsViewModel(
                     provisionedModels = provisioned,
                     isVaultUnlocked = vaultUnlocked,
                     allAuditEntries = auditEntries,
-                    filteredAuditEntries = filterAuditEntries(auditEntries, state.auditFilter)
+                    filteredAuditEntries = filterAuditEntries(auditEntries, state.auditFilter),
+                    isNotificationListenerEnabled = isNotifListenerEnabled,
+                    isNotificationPolicyAccessGranted = isNotifPolicyGranted
                 )
             }
             refreshQualitySuggestion(localeTag)

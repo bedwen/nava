@@ -1,8 +1,16 @@
 package com.nava.app.ui.mvi
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import com.nava.app.di.AppContainer
 import com.nava.app.di.PinnedModelCatalog
 import com.nava.app.ui.hub.NavaHubViewModel
+import com.nava.app.ui.navigation.NavaViewModelFactory
+import com.nava.app.ui.onboarding.OnboardingViewModel
+import com.nava.app.ui.profiles.PermissionProfilesViewModel
+import com.nava.app.ui.routines.RoutinesViewModel
+import com.nava.app.ui.settings.SettingsViewModel
 import com.nava.app.voice.VoiceInputState
 import com.nava.core.ai.lifecycle.DeviceHardwareSnapshot
 import com.nava.core.ai.lifecycle.DeviceHardwareStatusProvider
@@ -14,6 +22,8 @@ import com.nava.domain.ai.ResolutionResult
 import com.nava.domain.ai.ResolutionTier
 import com.nava.domain.ai.SlotValueAst
 import com.nava.domain.ai.ToolCallAst
+import com.nava.domain.automation.BackgroundTaskOutcome
+import com.nava.domain.automation.BackgroundTaskRequest
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.PermissionProfile
 import com.nava.domain.security.SensitiveSlotKind
@@ -31,7 +41,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
@@ -486,5 +498,196 @@ class NavaHubMviViewModelTest {
             "Expected OfflinePackMissing when offline voice pack is absent",
             tier2Vm.uiState.value.voiceState is VoiceInputState.OfflinePackMissing
         )
+    }
+
+    @Test
+    fun multiStepConfirmationResumptionExecutesOnlyPendingStepWithoutReExecutingStep0() = runTest {
+        val nowMs = 1_760_000_600_000L
+        val container = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            clockMs = { nowMs },
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        // Step 0 target (CLOCK) is AUTO; Step 1 target (SMS) is PROMPT_CARD
+        container.manageProfilesUseCase.assignTarget(
+            targetId = ToolTargetIds.CLOCK,
+            profileId = PermissionProfile.TRUSTED_SYSTEM_PROFILE_ID,
+            nowEpochMs = nowMs
+        )
+        container.manageProfilesUseCase.assignTarget(
+            targetId = ToolTargetIds.SMS,
+            profileId = PermissionProfile.SAFE_DRAFT_PROFILE_ID,
+            nowEpochMs = nowMs
+        )
+
+        val vm = NavaHubViewModel(
+            container = container,
+            dispatcher = Dispatchers.Unconfined,
+            clockMs = { nowMs }
+        )
+
+        val multiStepPlan = PlanAst(
+            planId = "plan-multistep-confirm-fg",
+            calls = listOf(
+                ToolCallAst(
+                    toolName = AutomationToolNames.SET_ALARM,
+                    arguments = mapOf(
+                        "time" to Tainted.fromUserUtterance(SlotValueAst.StringValue("06:30"))
+                    ),
+                    orderIndex = 0,
+                    targetId = ToolTargetIds.CLOCK
+                ),
+                ToolCallAst(
+                    toolName = AutomationToolNames.CREATE_SMS_DRAFT,
+                    arguments = mapOf(
+                        "recipient" to Tainted.fromUserUtterance(
+                            value = SlotValueAst.StringValue("+15550122"),
+                            slotKind = SensitiveSlotKind.RECIPIENT_ADDRESS
+                        ),
+                        "body" to Tainted.fromUserUtterance(
+                            value = SlotValueAst.StringValue("Good morning"),
+                            slotKind = SensitiveSlotKind.TEXT_BODY
+                        )
+                    ),
+                    orderIndex = 1,
+                    targetId = ToolTargetIds.SMS
+                )
+            )
+        )
+        val token = container.securityFirewall.mintToken(
+            requestId = "req-multistep-fg",
+            utteranceProvenance = DataProvenance.USER_UTTERANCE,
+            candidateTools = setOf(AutomationToolNames.SET_ALARM, AutomationToolNames.CREATE_SMS_DRAFT),
+            nowEpochMs = nowMs
+        )
+        val intentReq = IntentRequest(
+            requestId = token.requestId,
+            rawUtterance = "set alarm for 06:30 and draft sms to +15550122",
+            provenance = DataProvenance.USER_UTTERANCE,
+            issuedAtEpochMs = nowMs
+        )
+
+        vm.executeResolvedPlan(
+            intentRequest = intentReq,
+            tier = ResolutionTier.TIER_3_GEMMA,
+            plan = multiStepPlan,
+            capabilityToken = token
+        )
+
+        // Step 0 executed immediately; Step 1 paused at confirmation (pendingOrderIndex = 1)
+        val pendingConfirm = vm.uiState.value.activeConfirmation
+        assertNotNull("Expected Step 1 to pause for confirmation", pendingConfirm)
+        assertEquals(1, pendingConfirm!!.confirmation.pendingOrderIndex)
+
+        val clockExecsBeforeApprove = container.auditLogDao
+            .queryByTarget(ToolTargetIds.CLOCK, limit = 50)
+            .count { it.toolName == AutomationToolNames.SET_ALARM && it.actionSummary == "Executed tool set_alarm" }
+        assertEquals("Step 0 (set_alarm) must execute exactly once before Step 1 approval", 1, clockExecsBeforeApprove)
+
+        // Approve Step 1 -> Step 1 must execute, and Step 0 must NOT re-execute!
+        vm.onApproveConfirmation(requestId = pendingConfirm.requestId)
+        assertNull(vm.uiState.value.activeConfirmation)
+
+        val clockExecsAfterApprove = container.auditLogDao
+            .queryByTarget(ToolTargetIds.CLOCK, limit = 50)
+            .count { it.toolName == AutomationToolNames.SET_ALARM && it.actionSummary == "Executed tool set_alarm" }
+        assertEquals(
+            "Step 0 (set_alarm) must NOT be re-executed when approving Step 1",
+            1,
+            clockExecsAfterApprove
+        )
+
+        val smsExecsAfterApprove = container.auditLogDao
+            .queryByTarget(ToolTargetIds.SMS, limit = 50)
+            .count {
+                it.toolName == AutomationToolNames.CREATE_SMS_DRAFT &&
+                    it.actionSummary == "Executed tool create_sms_draft"
+            }
+        assertEquals("Step 1 (create_sms_draft) must execute once upon approval", 1, smsExecsAfterApprove)
+
+        // Verify BACKGROUND_TASK multi-step continuation also passes startFromOrderIndex = 1
+        val bgToken = container.securityFirewall.mintToken(
+            requestId = "req-multistep-bg",
+            utteranceProvenance = DataProvenance.USER_UTTERANCE,
+            candidateTools = setOf(AutomationToolNames.SET_ALARM, AutomationToolNames.CREATE_SMS_DRAFT),
+            nowEpochMs = nowMs
+        )
+        val bgPlan = multiStepPlan.copy(planId = "plan-multistep-confirm-bg")
+        val bgReq = BackgroundTaskRequest.PlanContinuation(
+            taskId = "task-multistep-bg",
+            plan = bgPlan,
+            capabilityToken = bgToken,
+            targetId = ToolTargetIds.CLOCK,
+            languageTag = "en",
+            enqueuedAtEpochMs = nowMs,
+            targetIdsByStep = mapOf(0 to ToolTargetIds.CLOCK, 1 to ToolTargetIds.SMS)
+        )
+        val bgInitialOutcome = container.backgroundTaskContinuationManager.executeNow(bgReq, nowMs)
+        assertTrue(bgInitialOutcome is BackgroundTaskOutcome.ConfirmationRequired)
+        val bgConfirmation = (bgInitialOutcome as BackgroundTaskOutcome.ConfirmationRequired).pendingConfirmation
+        assertEquals(1, bgConfirmation.pendingOrderIndex)
+
+        val clockExecsAfterBgStep0 = container.auditLogDao
+            .queryByTarget(ToolTargetIds.CLOCK, limit = 50)
+            .count { it.toolName == AutomationToolNames.SET_ALARM && it.actionSummary == "Executed tool set_alarm" }
+        assertEquals(2, clockExecsAfterBgStep0)
+
+        val bgPendingItem = container.pendingConfirmationStore.registerBackgroundTaskConfirmation(
+            taskId = bgReq.taskId,
+            request = bgReq,
+            confirmation = bgConfirmation,
+            nowEpochMs = nowMs
+        )
+        vm.onApproveConfirmation(requestId = bgPendingItem.requestId)
+
+        val clockExecsAfterBgApprove = container.auditLogDao
+            .queryByTarget(ToolTargetIds.CLOCK, limit = 50)
+            .count { it.toolName == AutomationToolNames.SET_ALARM && it.actionSummary == "Executed tool set_alarm" }
+        assertEquals(
+            "Background task Step 0 (set_alarm) must NOT re-execute when approving Step 1",
+            2,
+            clockExecsAfterBgApprove
+        )
+    }
+
+    @Test
+    fun navaViewModelFactoryInstantiatesAllFiveViewModelsWithoutReflection() = runTest {
+        val container = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        val factory = NavaViewModelFactory(container)
+        val store = ViewModelStore()
+        val provider = ViewModelProvider(store, factory)
+
+        val onboardingVm = provider[OnboardingViewModel::class.java]
+        val hubVm = provider[NavaHubViewModel::class.java]
+        val profilesVm = provider[PermissionProfilesViewModel::class.java]
+        val routinesVm = provider[RoutinesViewModel::class.java]
+        val settingsVm = provider[SettingsViewModel::class.java]
+
+        assertNotNull(onboardingVm)
+        assertNotNull(hubVm)
+        assertNotNull(profilesVm)
+        assertNotNull(routinesVm)
+        assertNotNull(settingsVm)
+
+        // ViewModelStore retains the same instance across lookups (config change survival)
+        assertSame(hubVm, provider[NavaHubViewModel::class.java])
+        assertSame(settingsVm, provider[SettingsViewModel::class.java])
+
+        // Unknown ViewModel class is deterministically rejected
+        class UnknownViewModel : ViewModel()
+        try {
+            factory.create(UnknownViewModel::class.java)
+            fail("Expected IllegalArgumentException for unknown ViewModel class")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+
+        // Clearing the ViewModelStore invokes onCleared() cleanly across all 5 ViewModels
+        store.clear()
     }
 }

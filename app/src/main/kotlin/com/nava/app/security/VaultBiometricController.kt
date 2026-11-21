@@ -7,6 +7,7 @@ import androidx.fragment.app.FragmentActivity
 import com.nava.core.security.vault.NavaVault
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -225,8 +226,10 @@ class VaultBiometricController(
                 )
             }
         } catch (e: CancellationException) {
-            navaVault.lock()
-            _isVaultUnlockedFlow.value = false
+            withContext(NonCancellable) {
+                navaVault.lock()
+                _isVaultUnlockedFlow.value = false
+            }
             throw e
         } catch (e: Exception) {
             navaVault.lock()
@@ -287,8 +290,10 @@ class VaultBiometricController(
                 }
             }
         } catch (e: CancellationException) {
-            navaVault.lock()
-            _isVaultUnlockedFlow.value = false
+            withContext(NonCancellable) {
+                navaVault.lock()
+                _isVaultUnlockedFlow.value = false
+            }
             throw e
         } catch (e: Exception) {
             navaVault.lock()

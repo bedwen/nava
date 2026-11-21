@@ -17,6 +17,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import com.nava.app.di.AppContainer
 import com.nava.app.ui.hub.NavaHubScreen
 import com.nava.app.ui.hub.NavaHubViewModel
@@ -59,16 +61,37 @@ fun NavaAppRoot(
         mutableStateOf(NavaNavigationState(currentDestination = startDest))
     }
 
-    val onboardingViewModel = remember(appContainer) { OnboardingViewModel(appContainer) }
-    val hubViewModel = remember(appContainer) { NavaHubViewModel(appContainer) }
-    val profilesViewModel = remember(appContainer) { PermissionProfilesViewModel(appContainer) }
-    val routinesViewModel = remember(appContainer) { RoutinesViewModel(appContainer) }
-    val settingsViewModel = remember(appContainer) { SettingsViewModel(appContainer) }
+    val vmFactory = remember(appContainer) { NavaViewModelFactory(appContainer) }
+    val fallbackViewModelStore = remember(appContainer) { ViewModelStore() }
+    val viewModelProvider = remember(activity, fallbackViewModelStore, vmFactory) {
+        if (activity != null) {
+            ViewModelProvider(activity, vmFactory)
+        } else {
+            ViewModelProvider(fallbackViewModelStore, vmFactory)
+        }
+    }
+    val onboardingViewModel = remember(viewModelProvider) {
+        viewModelProvider[OnboardingViewModel::class.java]
+    }
+    val hubViewModel = remember(viewModelProvider) {
+        viewModelProvider[NavaHubViewModel::class.java]
+    }
+    val profilesViewModel = remember(viewModelProvider) {
+        viewModelProvider[PermissionProfilesViewModel::class.java]
+    }
+    val routinesViewModel = remember(viewModelProvider) {
+        viewModelProvider[RoutinesViewModel::class.java]
+    }
+    val settingsViewModel = remember(viewModelProvider) {
+        viewModelProvider[SettingsViewModel::class.java]
+    }
 
-    DisposableEffect(appContainer) {
+    DisposableEffect(appContainer, activity, fallbackViewModelStore) {
         onDispose {
-            hubViewModel.onVoiceButtonClicked(hasRecordAudioPermission = false)
             appContainer.voiceInputController.cancel()
+            if (activity == null) {
+                fallbackViewModelStore.clear()
+            }
         }
     }
 
@@ -139,6 +162,7 @@ fun NavaAppRoot(
                         PermissionProfilesScreen(
                             viewModel = profilesViewModel,
                             bidiFormatter = appContainer.bidiTextFormatter,
+                            activeLocale = activeLocale,
                             initialFocusedTargetId = navState.focusedTargetId
                         )
                     }
@@ -146,7 +170,8 @@ fun NavaAppRoot(
                     NavaDestination.ROUTINES -> {
                         RoutinesScreen(
                             viewModel = routinesViewModel,
-                            bidiFormatter = appContainer.bidiTextFormatter
+                            bidiFormatter = appContainer.bidiTextFormatter,
+                            activeLocale = activeLocale
                         )
                     }
 

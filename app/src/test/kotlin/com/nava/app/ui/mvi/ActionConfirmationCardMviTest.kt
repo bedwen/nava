@@ -13,10 +13,16 @@ import com.nava.domain.ai.PlanAst
 import com.nava.domain.ai.ResolutionTier
 import com.nava.domain.ai.SlotValueAst
 import com.nava.domain.ai.ToolCallAst
+import com.nava.domain.security.AtomicCapability
+import com.nava.domain.security.ConfirmationLevel
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.PermissionProfile
+import com.nava.domain.security.PermissionProfilePreset
+import com.nava.domain.security.RuleActionSpec
+import com.nava.domain.security.RuleTriggerSpec
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.domain.security.Tainted
+import com.nava.domain.ui.MessageKey
 import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.ToolTargetIds
 import java.io.File
@@ -256,5 +262,187 @@ class ActionConfirmationCardMviTest {
             vm.uiState.value.activeConfirmation
         )
         assertEquals(listOf("bio_note_1"), container.navaVault.listNoteIds())
+    }
+
+    @Test
+    fun escalatedRoutineApprovalEnforcesGrantManagerAndSecurityFirewallAndRejectsSlotEdits() = runTest {
+        val nowMs = 1_760_000_700_000L
+        val container = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            clockMs = { nowMs },
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        val vm = NavaHubViewModel(
+            container = container,
+            dispatcher = Dispatchers.Unconfined,
+            clockMs = { nowMs }
+        )
+
+        // Seed an encrypted note so NOTES_DELETE has a real target note to delete when authorized
+        val customNotesProfile = PermissionProfile(
+            id = "custom_notes_prompt",
+            name = "Custom Notes Prompt",
+            preset = PermissionProfilePreset.CUSTOM,
+            capabilities = mapOf(
+                AtomicCapability.CREATE_DRAFT to ConfirmationLevel.AUTO,
+                AtomicCapability.MODIFY_DELETE_SEND to ConfirmationLevel.PROMPT_CARD
+            )
+        )
+        container.manageProfilesUseCase.saveProfile(customNotesProfile, nowMs)
+        container.manageProfilesUseCase.assignTarget(ToolTargetIds.NOTES, customNotesProfile.id, nowMs)
+
+        // Compile and approve an escalated routine that deletes note "routine_note_1"
+        val ruleId = "rule-delete-note-1"
+        container.compileRuleUseCase.compilePendingRule(
+            ruleId = ruleId,
+            triggerSpec = RuleTriggerSpec("daily_time", mapOf("time" to "23:00")),
+            staticActions = listOf(
+                RuleActionSpec(
+                    toolName = AutomationToolNames.NOTES_CREATE,
+                    requiredCapability = AtomicCapability.CREATE_DRAFT,
+                    staticArguments = mapOf("title" to "TempNote", "content" to "TempBody")
+                ),
+                RuleActionSpec(
+                    toolName = AutomationToolNames.NOTES_DELETE,
+                    requiredCapability = AtomicCapability.MODIFY_DELETE_SEND,
+                    staticArguments = mapOf("note_id" to "1")
+                )
+            ),
+            nowEpochMs = nowMs
+        )
+        val approvedGrant = container.compileRuleUseCase.approvePendingRule(ruleId, nowMs)
+
+        // 1. Register ESCALATED_ROUTINE confirmation and verify slot editing is strictly rejected
+        val routineItem = container.pendingConfirmationStore.registerEscalatedRoutineConfirmation(
+            grant = approvedGrant,
+            requestId = "routine:$ruleId:1",
+            nowEpochMs = nowMs
+        )
+        val rejectedEdit = container.pendingConfirmationStore.updateEditedSlot(
+            requestId = routineItem.requestId,
+            slotName = "title",
+            newRawValue = "TamperedTitle"
+        )
+        assertNull("ESCALATED_ROUTINE slot edits must be rejected to protect HMAC seal", rejectedEdit)
+        assertEquals(
+            "TempNote",
+            container.pendingConfirmationStore.findByRequestId(routineItem.requestId)!!
+                .confirmation.canonicalArguments.getValue("title").value
+        )
+
+        // Also verify deeply-nested adversarial control-token input (> 256 passes) returns null without throwing
+        val deeplyNestedAdversarial = "<|".repeat(300) + "turn>".repeat(300)
+        val tokenFg = container.securityFirewall.mintToken(
+            requestId = "req-deep-nest",
+            utteranceProvenance = DataProvenance.USER_UTTERANCE,
+            candidateTools = setOf(AutomationToolNames.NOTES_CREATE),
+            nowEpochMs = nowMs
+        )
+        val planFg = PlanAst(
+            planId = "plan-deep-nest",
+            calls = listOf(
+                ToolCallAst(
+                    toolName = AutomationToolNames.NOTES_CREATE,
+                    arguments = mapOf("title" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Safe"))),
+                    orderIndex = 0,
+                    targetId = ToolTargetIds.NOTES
+                )
+            )
+        )
+        container.pendingConfirmationStore.registerForegroundConfirmation(
+            plan = planFg,
+            capabilityToken = tokenFg,
+            confirmation = com.nava.domain.tool.ToolResult.ConfirmationRequired(
+                message = com.nava.domain.ui.UserMessage(MessageKey.ACTION_CONFIRMATION_REQUIRED),
+                pendingToolName = AutomationToolNames.NOTES_CREATE,
+                targetId = ToolTargetIds.NOTES,
+                canonicalArguments = mapOf("title" to Tainted.fromUserUtterance("Safe"))
+            ),
+            nowEpochMs = nowMs
+        )
+        assertNull(
+            "Adversarial deeply-nested control tokens must return null instead of crashing UI",
+            container.pendingConfirmationStore.updateEditedSlot("req-deep-nest", "title", deeplyNestedAdversarial)
+        )
+        container.pendingConfirmationStore.dismiss("req-deep-nest")
+
+        // 2. If Global Rules Pause is turned ON after registration, approving the routine is denied
+        container.ruleCapabilityGrantManager.setGlobalRulesPaused(true)
+        vm.onApproveConfirmation(requestId = routineItem.requestId)
+        assertEquals(MessageKey.ROUTINE_EXECUTION_DENIED, vm.uiState.value.lastUserMessage?.key)
+        assertTrue(container.encryptedNoteDao.listNotes().isEmpty())
+        container.ruleCapabilityGrantManager.setGlobalRulesPaused(false)
+
+        // 3. If the routine is PAUSED after registration, approving the routine is denied
+        val routineItem2 = container.pendingConfirmationStore.registerEscalatedRoutineConfirmation(
+            grant = approvedGrant,
+            requestId = "routine:$ruleId:2",
+            nowEpochMs = nowMs
+        )
+        container.compileRuleUseCase.pauseRule(ruleId, nowMs)
+        vm.onApproveConfirmation(requestId = routineItem2.requestId)
+        assertEquals(MessageKey.ROUTINE_EXECUTION_DENIED, vm.uiState.value.lastUserMessage?.key)
+        assertTrue(container.encryptedNoteDao.listNotes().isEmpty())
+
+        // Re-approve the routine
+        val reApprovedGrant = container.compileRuleUseCase.approvePendingRule(ruleId, nowMs)
+
+        // 4. If the target PermissionProfile is switched to Default-Deny (STRICTLY_ISOLATED),
+        // SecurityFirewall blocks the escalated routine on approval!
+        container.manageProfilesUseCase.assignTarget(
+            targetId = ToolTargetIds.NOTES,
+            profileId = PermissionProfile.DEFAULT_DENY_PROFILE_ID,
+            nowEpochMs = nowMs
+        )
+        val routineItem3 = container.pendingConfirmationStore.registerEscalatedRoutineConfirmation(
+            grant = reApprovedGrant,
+            requestId = "routine:$ruleId:3",
+            nowEpochMs = nowMs
+        )
+        vm.onApproveConfirmation(requestId = routineItem3.requestId)
+        assertEquals(
+            "SecurityFirewall must deny escalated routine when target PermissionProfile is DISABLED",
+            MessageKey.ERROR_PERMISSION_DENIED,
+            vm.uiState.value.lastUserMessage?.key
+        )
+        assertTrue(container.encryptedNoteDao.listNotes().isEmpty())
+
+        // 5. Restore customNotesProfile -> approving the active, sealed routine executes through
+        // SecurityFirewall + ExecutePlanUseCase and audits under ToolTargetIds.NOTES
+        container.manageProfilesUseCase.assignTarget(
+            targetId = ToolTargetIds.NOTES,
+            profileId = customNotesProfile.id,
+            nowEpochMs = nowMs
+        )
+        val createOnlyRuleId = "rule-create-note-only"
+        container.compileRuleUseCase.compilePendingRule(
+            ruleId = createOnlyRuleId,
+            triggerSpec = RuleTriggerSpec("daily_time", mapOf("time" to "08:00")),
+            staticActions = listOf(
+                RuleActionSpec(
+                    toolName = AutomationToolNames.NOTES_CREATE,
+                    requiredCapability = AtomicCapability.CREATE_DRAFT,
+                    staticArguments = mapOf("title" to "SealedTitle", "content" to "SealedContent")
+                )
+            ),
+            nowEpochMs = nowMs
+        )
+        val createOnlyGrant = container.compileRuleUseCase.approvePendingRule(createOnlyRuleId, nowMs)
+        val routineItem4 = container.pendingConfirmationStore.registerEscalatedRoutineConfirmation(
+            grant = createOnlyGrant,
+            requestId = "routine:$createOnlyRuleId:4",
+            nowEpochMs = nowMs
+        )
+        vm.onApproveConfirmation(requestId = routineItem4.requestId)
+        assertEquals(MessageKey.ACTION_NOTE_SAVED, vm.uiState.value.lastUserMessage?.key)
+        val savedNotes = container.encryptedNoteDao.listNotes()
+        assertEquals(1, savedNotes.size)
+        assertEquals("SealedTitle", savedNotes.first().title)
+        assertTrue(
+            "Expected audit log recorded under nava.notes targetId via ExecutePlanUseCase",
+            container.auditLogDao.queryByTarget(ToolTargetIds.NOTES, limit = 20)
+                .any { it.toolName == AutomationToolNames.NOTES_CREATE && it.decision == "SUCCESS" }
+        )
     }
 }

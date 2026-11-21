@@ -84,10 +84,6 @@ class OnboardingViewModel(
         val recommended = PinnedModelCatalog.recommendedSpecForRamTier(ramTier)
         val eligible = PinnedModelCatalog.eligibleSpecsForRamTier(ramTier)
         val initialSpec = PinnedModelCatalog.findByModelId(persisted.selectedModelId) ?: recommended
-        val modelsDir = File(container.safModelProvisioner.modelsDirectoryPath())
-        val availableBytes = runCatching {
-            container.storageSpaceProvider.availableBytes(modelsDir)
-        }.getOrDefault(0L)
 
         val initialStep = when {
             persisted.isOnboardingCompleted -> OnboardingStep.COMPLETE
@@ -106,7 +102,7 @@ class OnboardingViewModel(
             selectedModelSpec = initialSpec,
             selectedModelId = persisted.selectedModelId,
             requiredTwoTimesHeadroomBytes = PinnedModelCatalog.temporaryTwoTimesStorageBytes(initialSpec),
-            availableStorageBytes = availableBytes
+            availableStorageBytes = 0L
         )
     }
 
@@ -114,11 +110,16 @@ class OnboardingViewModel(
         vmScope.launch {
             val languages = container.appLocaleManager.availableLanguages()
             val localeTag = container.appLocaleManager.currentLocaleTag()
+            val availableBytes = runCatching {
+                val modelsDir = File(container.safModelProvisioner.modelsDirectoryPath())
+                container.storageSpaceProvider.availableBytes(modelsDir)
+            }.getOrDefault(0L)
             _uiState.update { state ->
                 state.copy(
                     activeLocaleTag = localeTag,
                     allLanguages = languages,
-                    filteredLanguages = filterLanguages(languages, state.languageSearchQuery)
+                    filteredLanguages = filterLanguages(languages, state.languageSearchQuery),
+                    availableStorageBytes = availableBytes
                 )
             }
         }

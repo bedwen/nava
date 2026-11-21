@@ -35,6 +35,7 @@ import com.nava.app.R
 import com.nava.app.locale.BidiTextFormatter
 import com.nava.app.locale.NavaMessageRenderer
 import com.nava.app.security.PendingConfirmationItem
+import com.nava.app.security.PendingConfirmationSource
 import com.nava.domain.security.DataProvenance
 import java.util.Locale
 
@@ -185,8 +186,10 @@ fun ActionConfirmationCard(
         )
     }
 
+    val isEditable = item.source != PendingConfirmationSource.ESCALATED_ROUTINE &&
+        model.slots.isNotEmpty()
     var isEditing by remember(item.requestId) { mutableStateOf(false) }
-    val draftValues = remember(item.requestId, item.confirmation.canonicalArguments) {
+    val draftValues = remember(item.requestId) {
         mutableStateMapOf<String, String>().apply {
             for ((k, v) in item.confirmation.canonicalArguments) {
                 put(k, v.value)
@@ -320,7 +323,7 @@ fun ActionConfirmationCard(
                                 )
                             }
 
-                            if (isEditing) {
+                            if (isEditing && isEditable) {
                                 val currentDraft = draftValues[rawSlotKey] ?: slot.rawCanonicalValue
                                 OutlinedTextField(
                                     value = currentDraft,
@@ -358,7 +361,7 @@ fun ActionConfirmationCard(
                     Text(text = stringResource(R.string.confirm_button_cancel))
                 }
 
-                if (model.slots.isNotEmpty()) {
+                if (isEditable) {
                     OutlinedButton(
                         onClick = { isEditing = !isEditing },
                         modifier = Modifier.padding(horizontal = 8.dp)
