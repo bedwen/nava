@@ -21,7 +21,7 @@
     <string name="msg_action_confirmation_required">%1$s için onay gerekiyor</string>
     <string name="msg_action_biometric_required">%1$s için biyometrik doğrulama gerekiyor</string>
     <string name="msg_warning_untrusted_external_source">Uyarı: Güvenilmeyen harici kaynak (%1$s)</string>
-    <string name="msg_error_permission_denied">İzin reddedildi: %1$s</string>
+    <string name="msg_error_permission_denied">%1$s için izin reddedildi (%2$s)</string>
     <string name="msg_error_tool_not_found">Otomasyon aracı bulunamadı: %1$s</string>
     <string name="msg_error_security_violation">Güvenlik ihlali: %1$s</string>
     <string name="msg_error_model_unavailable">Cihaz içi dil modeli kullanılamıyor</string>
@@ -40,7 +40,7 @@
     <string name="msg_action_vault_note_read">Kasa\'dan şifrelenmiş not okundu: %1$s</string>
     <string name="msg_action_vault_note_deleted">Kasa\'dan şifrelenmiş not silindi: %1$s</string>
     <string name="msg_action_direct_call_initiated">%1$s numarasına arama başlatıldı</string>
-    <string name="msg_action_volume_updated">%1$s ses akışı güncellendi</string>
+    <string name="msg_action_volume_updated">%1$s ses düzeyi %2$s%% olarak güncellendi</string>
     <string name="msg_action_app_launched">Uygulama başlatıldı: %1$s</string>
     <string name="msg_action_notifications_summarized">%1$s bildirim özetlendi</string>
     <string name="msg_action_notifications_empty">Özetlenecek yeni bildirim yok</string>

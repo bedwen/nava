@@ -21,7 +21,7 @@
     <string name="msg_action_confirmation_required">يلزم التأكيد لـ %1$s</string>
     <string name="msg_action_biometric_required">يلزم التحقق البيومتري لـ %1$s</string>
     <string name="msg_warning_untrusted_external_source">تحذير: مصدر خارجي غير موثوق (%1$s)</string>
-    <string name="msg_error_permission_denied">تم رفض الإذن: %1$s</string>
+    <string name="msg_error_permission_denied">تم رفض الإذن لـ %1$s (%2$s)</string>
     <string name="msg_error_tool_not_found">لم يتم العثور على أداة الأتمتة: %1$s</string>
     <string name="msg_error_security_violation">انتهاك أمني: %1$s</string>
     <string name="msg_error_model_unavailable">نموذج اللغة على الجهاز غير متوفر</string>
@@ -40,7 +40,7 @@
     <string name="msg_action_vault_note_read">تمت قراءة الملاحظة المشفرة من الخزنة: %1$s</string>
     <string name="msg_action_vault_note_deleted">تم حذف الملاحظة المشفرة من الخزنة: %1$s</string>
     <string name="msg_action_direct_call_initiated">تم بدء الاتصال بـ %1$s</string>
-    <string name="msg_action_volume_updated">تم تحديث مستوى صوت البث %1$s</string>
+    <string name="msg_action_volume_updated">تم تحديث مستوى الصوت لـ %1$s إلى %2$s%%</string>
     <string name="msg_action_app_launched">تم تشغيل التطبيق: %1$s</string>
     <string name="msg_action_notifications_summarized">تم تلخيص %1$s من الإشعارات</string>
     <string name="msg_action_notifications_empty">لا توجد إشعارات جديدة لتلخيصها</string>

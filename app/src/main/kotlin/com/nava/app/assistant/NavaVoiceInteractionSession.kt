@@ -1,7 +1,5 @@
 package com.nava.app.assistant
 
-import android.app.assist.AssistContent
-import android.app.assist.AssistStructure
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -27,12 +25,8 @@ open class NavaVoiceInteractionSession(
         runCatching { hide() }
     }
 
-    override fun onHandleAssist(
-        data: Bundle?,
-        structure: AssistStructure?,
-        content: AssistContent?
-    ) {
-        super.onHandleAssist(data, structure, content)
+    override fun onHandleAssist(state: AssistState) {
+        super.onHandleAssist(state)
     }
 
     override fun onHide() {

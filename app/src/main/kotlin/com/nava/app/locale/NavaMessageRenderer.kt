@@ -76,7 +76,7 @@ class FallbackEnglishMessageTemplateProvider : MessageTemplateProvider {
         MessageKey.ROUTINE_EXECUTION_FAILED -> "Routine execution failed: %1\$s"
         MessageKey.BACKGROUND_TASK_RUNNING -> "Background task in progress: %1\$s"
         MessageKey.BACKGROUND_TASK_COMPLETED -> "Background task completed: %1\$s"
-        MessageKey.BACKGROUND_TASK_CONFIRMATION_REQUIRED -> "Background task awaiting confirmation: %1\$s"
+        MessageKey.BACKGROUND_TASK_CONFIRMATION_REQUIRED -> "Background task requires confirmation"
         MessageKey.BACKGROUND_TASK_FAILED -> "Background task failed: %1\$s"
         MessageKey.BACKGROUND_TASK_CANCELLED -> "Background task cancelled: %1\$s"
         MessageKey.ERROR_INVALID_ARGUMENTS -> "Invalid tool arguments: %1\$s"
