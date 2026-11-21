@@ -535,7 +535,7 @@ class Phase5NeuralCanvasAllocationRedTeamTest {
                 i++
             } else {
                 if (i + 2 < n && text.substring(i, i + 3) == "\"\"\"") {
-                    inTriple = True
+                    inTriple = true
                     out.append("\"\"\"")
                     i += 3
                 } else if (ch == '"') {
@@ -569,12 +569,10 @@ class Phase5NeuralCanvasAllocationRedTeamTest {
     }
 
     companion object {
-        private const val True: Boolean = true
-
         private val DRAW_ENTRY_REGEX: Regex =
             Regex("""\b(?:onDraw|DrawScope\b|Canvas\s*\()""")
 
         private val FORBIDDEN_ALLOC_REGEX: Regex =
-            Regex("""(?:\bPaint\s*\(|\bPath\s*\(|\bRectF\s*\(|\bBrush\.|\bColor\s*\(|\bmutableListOf\s*\(|\blistOf\s*\(|\bArrayList\s*\()""")
+            Regex("""(?:\bPaint\s*\(|\bPath\s*\(|\bRectF\s*\(|\bBrush\.|\bColor\s*\(|\bmutableListOf\s*\(|\blistOf\s*\(|\bArrayList(?:\s*<[^>]*>)?\s*\()""")
     }
 }
