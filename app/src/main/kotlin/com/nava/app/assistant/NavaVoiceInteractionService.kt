@@ -35,7 +35,7 @@ open class NavaVoiceInteractionService : VoiceInteractionService() {
         fun isServiceActive(context: Context): Boolean {
             return try {
                 val component = ComponentName(context, NavaVoiceInteractionService::class.java)
-                isActive(context, component)
+                isActiveService(context, component)
             } catch (_: Exception) {
                 false
             }
