@@ -19,6 +19,7 @@ import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,12 +100,23 @@ class SettingsViewModel(
 
     private val vmScope = CoroutineScope(SupervisorJob() + dispatcher)
 
+    @Volatile
+    private var activeRefreshJob: Job? = null
+
     private val _uiState = MutableStateFlow(createInitialState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     init {
         observeContainerState()
         refreshAll()
+    }
+
+    suspend fun awaitRefresh() {
+        activeRefreshJob?.join()
+    }
+
+    fun clearForTesting() {
+        onCleared()
     }
 
     private fun createInitialState(): SettingsUiState {
@@ -143,8 +155,8 @@ class SettingsViewModel(
         }
     }
 
-    fun refreshAll() {
-        vmScope.launch {
+    fun refreshAll(): Job {
+        val job = vmScope.launch {
             val languages = container.appLocaleManager.availableLanguages()
             val localeTag = container.appLocaleManager.currentLocaleTag()
             val ramTier = container.thermalModelLifecycleManager.currentRamTier()
@@ -169,6 +181,8 @@ class SettingsViewModel(
             }
             refreshQualitySuggestion(localeTag)
         }
+        activeRefreshJob = job
+        return job
     }
 
     private suspend fun refreshQualitySuggestion(localeTag: String) {
@@ -200,8 +214,8 @@ class SettingsViewModel(
     /**
      * Switches the application's active locale via [AppLocaleManager.setApplicationLocale].
      */
-    fun selectLanguage(bcp47Tag: String) {
-        vmScope.launch {
+    fun selectLanguage(bcp47Tag: String): Job {
+        return vmScope.launch {
             val resolved = container.appLocaleManager.setApplicationLocale(bcp47Tag)
             _uiState.update { it.copy(activeLocaleTag = resolved, errorMessage = null) }
             refreshQualitySuggestion(resolved)
@@ -219,8 +233,8 @@ class SettingsViewModel(
      * Selects an already-provisioned `.litertlm` model by [modelId] as the active model in
      * `OnboardingStateStore`.
      */
-    fun selectActiveModel(modelId: String) {
-        vmScope.launch {
+    fun selectActiveModel(modelId: String): Job {
+        return vmScope.launch {
             try {
                 val updated = container.onboardingStateStore.setSelectedModelId(modelId)
                 _uiState.update {
@@ -277,8 +291,8 @@ class SettingsViewModel(
      * Verifies the streaming SHA-256 digest of a provisioned `.litertlm` model file against its
      * pinned digest in [PinnedModelCatalog].
      */
-    fun verifyProvisionedModel(fileName: String) {
-        vmScope.launch {
+    fun verifyProvisionedModel(fileName: String): Job {
+        return vmScope.launch {
             val spec = PinnedModelCatalog.findByFileName(fileName)
             val modelsDir = File(container.safModelProvisioner.modelsDirectoryPath())
             val candidateFile = File(modelsDir, fileName)
@@ -301,8 +315,8 @@ class SettingsViewModel(
     /**
      * Deletes a provisioned `.litertlm` model file from app-private storage (`filesDir/models/`).
      */
-    fun deleteProvisionedModel(fileName: String) {
-        vmScope.launch {
+    fun deleteProvisionedModel(fileName: String): Job {
+        return vmScope.launch {
             val deleted = container.safModelProvisioner.deleteProvisionedModel(fileName)
             if (deleted) {
                 val deletedModelId = PinnedModelCatalog.findByFileName(fileName)?.modelId
@@ -328,8 +342,8 @@ class SettingsViewModel(
     /**
      * Immediately locks Nava Secure Vault and zeroizes the in-memory DEK and tracked plaintexts.
      */
-    fun lockVault() {
-        vmScope.launch {
+    fun lockVault(): Job {
+        return vmScope.launch {
             container.vaultBiometricController.lock()
             _uiState.update {
                 it.copy(
@@ -346,8 +360,8 @@ class SettingsViewModel(
     fun unlockVault(
         activity: FragmentActivity? = null,
         labels: BiometricPromptLabels = BiometricPromptLabels()
-    ) {
-        vmScope.launch {
+    ): Job {
+        return vmScope.launch {
             val outcome = if (activity != null) {
                 container.vaultBiometricController.unlock(activity, labels)
             } else {
@@ -396,8 +410,8 @@ class SettingsViewModel(
         }
     }
 
-    fun refreshAuditLogs() {
-        vmScope.launch {
+    fun refreshAuditLogs(): Job {
+        return vmScope.launch {
             val entries = container.auditLogDao.queryRecent(DEFAULT_AUDIT_LOG_LIMIT)
             _uiState.update { state ->
                 state.copy(

@@ -100,50 +100,55 @@ class SettingsAndActivitiesMviTest {
             dispatcher = Dispatchers.Unconfined,
             clockMs = { nowMs }
         )
+        try {
+            vm.awaitRefresh()
 
-        // 1. Searchable language picker over SupportedLanguageCatalog + AppLocaleManager
-        assertTrue(vm.uiState.value.allLanguages.size >= 5)
-        vm.onLanguageSearchQueryChanged("arab")
-        assertTrue(vm.uiState.value.filteredLanguages.any { it.bcp47Tag == "ar" })
+            // 1. Searchable language picker over SupportedLanguageCatalog + AppLocaleManager
+            assertTrue(vm.uiState.value.allLanguages.size >= 5)
+            vm.onLanguageSearchQueryChanged("arab")
+            assertTrue(vm.uiState.value.filteredLanguages.any { it.bcp47Tag == "ar" })
 
-        vm.selectLanguage("ar")
-        assertEquals("ar", vm.uiState.value.activeLocaleTag)
-        assertTrue(container.appLocaleManager.isCurrentLocaleRtl())
+            vm.selectLanguage("ar").join()
+            assertEquals("ar", vm.uiState.value.activeLocaleTag)
+            assertTrue(container.appLocaleManager.isCurrentLocaleRtl())
 
-        // 2. Provisioned model list, selection, and deletion
-        assertEquals(1, vm.uiState.value.provisionedModels.size)
-        assertEquals(PinnedModelCatalog.FILE_NAME_GEMMA4_E2B, vm.uiState.value.provisionedModels.first().fileName)
+            // 2. Provisioned model list, selection, and deletion
+            assertEquals(1, vm.uiState.value.provisionedModels.size)
+            assertEquals(PinnedModelCatalog.FILE_NAME_GEMMA4_E2B, vm.uiState.value.provisionedModels.first().fileName)
 
-        vm.selectActiveModel(PinnedModelCatalog.MODEL_ID_GEMMA4_E2B)
-        assertEquals(PinnedModelCatalog.MODEL_ID_GEMMA4_E2B, vm.uiState.value.selectedModelId)
+            vm.selectActiveModel(PinnedModelCatalog.MODEL_ID_GEMMA4_E2B).join()
+            assertEquals(PinnedModelCatalog.MODEL_ID_GEMMA4_E2B, vm.uiState.value.selectedModelId)
 
-        vm.deleteProvisionedModel(PinnedModelCatalog.FILE_NAME_GEMMA4_E2B)
-        assertTrue(vm.uiState.value.provisionedModels.isEmpty())
-        assertNull(vm.uiState.value.selectedModelId)
+            vm.deleteProvisionedModel(PinnedModelCatalog.FILE_NAME_GEMMA4_E2B).join()
+            assertTrue(vm.uiState.value.provisionedModels.isEmpty())
+            assertNull(vm.uiState.value.selectedModelId)
 
-        // 3. Vault biometric unlock & immediate zeroization lock controls
-        assertFalse(vm.uiState.value.isVaultUnlocked)
-        vm.unlockVault(activity = null)
-        assertTrue(vm.uiState.value.isVaultUnlocked)
-        assertTrue(container.navaVault.isUnlocked())
+            // 3. Vault biometric unlock & immediate zeroization lock controls
+            assertFalse(vm.uiState.value.isVaultUnlocked)
+            vm.unlockVault(activity = null).join()
+            assertTrue(vm.uiState.value.isVaultUnlocked)
+            assertTrue(container.navaVault.isUnlocked())
 
-        vm.lockVault()
-        assertFalse(vm.uiState.value.isVaultUnlocked)
-        assertFalse(container.navaVault.isUnlocked())
+            vm.lockVault().join()
+            assertFalse(vm.uiState.value.isVaultUnlocked)
+            assertFalse(container.navaVault.isUnlocked())
 
-        // 4. System integration intent tracking
-        vm.onSystemIntegrationRequested(SystemIntegrationTarget.ASSISTANT_ROLE)
-        assertEquals(SystemIntegrationTarget.ASSISTANT_ROLE, vm.uiState.value.lastRequestedSystemTarget)
+            // 4. System integration intent tracking
+            vm.onSystemIntegrationRequested(SystemIntegrationTarget.ASSISTANT_ROLE)
+            assertEquals(SystemIntegrationTarget.ASSISTANT_ROLE, vm.uiState.value.lastRequestedSystemTarget)
 
-        // 5. Audit log viewer ALL vs DENIED_ONLY filter
-        assertEquals(2, vm.uiState.value.allAuditEntries.size)
-        assertEquals(2, vm.uiState.value.filteredAuditEntries.size)
+            // 5. Audit log viewer ALL vs DENIED_ONLY filter
+            assertEquals(2, vm.uiState.value.allAuditEntries.size)
+            assertEquals(2, vm.uiState.value.filteredAuditEntries.size)
 
-        vm.setAuditFilter(AuditLogFilter.DENIED_ONLY)
-        assertEquals(AuditLogFilter.DENIED_ONLY, vm.uiState.value.auditFilter)
-        assertEquals(1, vm.uiState.value.filteredAuditEntries.size)
-        assertEquals("DENIED", vm.uiState.value.filteredAuditEntries.first().decision)
-        assertEquals("place_call", vm.uiState.value.filteredAuditEntries.first().toolName)
+            vm.setAuditFilter(AuditLogFilter.DENIED_ONLY)
+            assertEquals(AuditLogFilter.DENIED_ONLY, vm.uiState.value.auditFilter)
+            assertEquals(1, vm.uiState.value.filteredAuditEntries.size)
+            assertEquals("DENIED", vm.uiState.value.filteredAuditEntries.first().decision)
+            assertEquals("place_call", vm.uiState.value.filteredAuditEntries.first().toolName)
+        } finally {
+            vm.clearForTesting()
+        }
     }
 
     @Test
