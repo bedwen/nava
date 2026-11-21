@@ -2,7 +2,7 @@ package com.nava.app.di
 
 import android.app.Application
 import android.content.Context
-import com.nava.app.locale.FallbackEnglishMessageTemplateProvider
+import com.nava.app.locale.AndroidResourceMessageTemplateProvider
 import com.nava.app.locale.MessageTemplateProvider
 
 /**
@@ -21,11 +21,11 @@ open class NavaApplication : Application() {
 
     /**
      * Configurable factory hook for [MessageTemplateProvider].
-     * Defaults to [FallbackEnglishMessageTemplateProvider] in Wave 1 and allows Wave 2 to wire
-     * `AndroidResourceMessageTemplateProvider` cleanly.
+     * Wires [AndroidResourceMessageTemplateProvider] reading `res/values/strings.xml` on Android
+     * while allowing testing overrides.
      */
-    var templateProviderFactory: (Context) -> MessageTemplateProvider = {
-        FallbackEnglishMessageTemplateProvider()
+    var templateProviderFactory: (Context) -> MessageTemplateProvider = { ctx ->
+        AndroidResourceMessageTemplateProvider(ctx)
     }
 
     /**
