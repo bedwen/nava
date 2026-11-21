@@ -1,0 +1,284 @@
+package com.nava.app.ui.routines
+
+import androidx.lifecycle.ViewModel
+import com.nava.app.di.AppContainer
+import com.nava.domain.automation.RoutineExecutionOutcome
+import com.nava.domain.security.AtomicCapability
+import com.nava.domain.security.DataProvenance
+import com.nava.domain.security.RuleActionSpec
+import com.nava.domain.security.RuleApprovalState
+import com.nava.domain.security.RuleCapabilityGrant
+import com.nava.domain.security.RuleTriggerSpec
+import com.nava.feature.automations.common.AutomationToolNames
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/**
+ * Pure-JVM presentation model for a Routine Consent Card (PLAN.md Section 5.6 & Requirement 7).
+ */
+data class RoutineConsentCardModel(
+    val grant: RuleCapabilityGrant,
+    val ruleId: String,
+    val triggerType: String,
+    val triggerParameters: Map<String, String>,
+    val staticActions: List<RuleActionSpec>,
+    val requiresInteractiveEscalationWarning: Boolean,
+    val nonUnattendedActionNames: List<String>
+)
+
+/**
+ * Builds a [RoutineConsentCardModel] evaluating whether any action in [grant] requires
+ * interactive confirmation (`Biometric`, `Nava Vault`, or [AtomicCapability.MODIFY_DELETE_SEND]).
+ */
+fun buildRoutineConsentCardModel(grant: RuleCapabilityGrant): RoutineConsentCardModel {
+    val nonUnattended = grant.staticActions
+        .filter { action ->
+            action.requiresInteractiveConfirmation ||
+                action.requiresBiometric ||
+                action.requiredCapability == AtomicCapability.MODIFY_DELETE_SEND ||
+                action.toolName in AutomationToolNames.VAULT_TOOLS
+        }
+        .map { it.toolName }
+
+    return RoutineConsentCardModel(
+        grant = grant,
+        ruleId = grant.ruleId,
+        triggerType = grant.triggerSpec.triggerType,
+        triggerParameters = grant.triggerSpec.parameters,
+        staticActions = grant.staticActions,
+        requiresInteractiveEscalationWarning = grant.requiresInteractiveUpgrade || nonUnattended.isNotEmpty(),
+        nonUnattendedActionNames = nonUnattended
+    )
+}
+
+/**
+ * Immutable MVI state for the Automations & Routines screen (PLAN.md Section 5.6).
+ */
+data class RoutinesUiState(
+    val allRules: List<RuleCapabilityGrant> = emptyList(),
+    val pendingApprovalRules: List<RuleCapabilityGrant> = emptyList(),
+    val activeRules: List<RuleCapabilityGrant> = emptyList(),
+    val pausedRules: List<RuleCapabilityGrant> = emptyList(),
+    val revokedRules: List<RuleCapabilityGrant> = emptyList(),
+    val consentCards: List<RoutineConsentCardModel> = emptyList(),
+    val isGlobalPaused: Boolean = false,
+    val lastExecutionOutcome: RoutineExecutionOutcome? = null,
+    val statusMessage: String? = null,
+    val errorMessage: String? = null
+)
+
+/**
+ * MVI ViewModel managing compile-time user-approved [RuleCapabilityGrant] lifecycles,
+ * Routine Consent Cards, single-tap Approve / Pause / Revoke actions, and the Global Pause switch.
+ */
+class RoutinesViewModel(
+    private val container: AppContainer,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val clockMs: () -> Long = System::currentTimeMillis
+) : ViewModel() {
+
+    private val vmScope = CoroutineScope(SupervisorJob() + dispatcher)
+
+    private val _uiState = MutableStateFlow(
+        RoutinesUiState(
+            isGlobalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused()
+        )
+    )
+    val uiState: StateFlow<RoutinesUiState> = _uiState.asStateFlow()
+
+    init {
+        refreshRules()
+    }
+
+    fun refreshRules() {
+        vmScope.launch {
+            val rules = container.compileRuleUseCase.listRules()
+                .sortedBy { it.ruleId }
+            val pending = rules.filter { it.approvalState == RuleApprovalState.PENDING_USER_APPROVAL }
+            val active = rules.filter { it.approvalState == RuleApprovalState.APPROVED_ACTIVE }
+            val paused = rules.filter { it.approvalState == RuleApprovalState.PAUSED }
+            val revoked = rules.filter { it.approvalState == RuleApprovalState.REVOKED }
+            val consentModels = rules.map(::buildRoutineConsentCardModel)
+            val globalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused()
+
+            _uiState.update { state ->
+                state.copy(
+                    allRules = rules,
+                    pendingApprovalRules = pending,
+                    activeRules = active,
+                    pausedRules = paused,
+                    revokedRules = revoked,
+                    consentCards = consentModels,
+                    isGlobalPaused = globalPaused
+                )
+            }
+        }
+    }
+
+    /**
+     * Compiles a new routine into [RuleApprovalState.PENDING_USER_APPROVAL] via `CompileRuleUseCase`.
+     */
+    fun compilePendingRule(
+        ruleId: String,
+        triggerSpec: RuleTriggerSpec,
+        staticActions: List<RuleActionSpec>
+    ) {
+        vmScope.launch {
+            try {
+                container.compileRuleUseCase.compilePendingRule(
+                    ruleId = ruleId,
+                    triggerSpec = triggerSpec,
+                    staticActions = staticActions,
+                    nowEpochMs = clockMs(),
+                    provenance = DataProvenance.USER_UTTERANCE
+                )
+                _uiState.update { it.copy(errorMessage = null) }
+                refreshRules()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.message ?: "Failed to compile routine") }
+            }
+        }
+    }
+
+    /**
+     * Single-tap Approve: Mints an `HMAC-SHA256` sealed [RuleCapabilityGrant] via
+     * `CompileRuleUseCase.approvePendingRule` and schedules it in `RoutineExecutorPort`
+     * (unless globally paused).
+     */
+    fun approveRule(ruleId: String) {
+        vmScope.launch {
+            try {
+                val approved = container.compileRuleUseCase.approvePendingRule(
+                    ruleId = ruleId,
+                    nowEpochMs = clockMs()
+                )
+                if (!container.ruleCapabilityGrantManager.isGlobalRulesPaused()) {
+                    container.routineExecutor.scheduleRule(approved)
+                }
+                _uiState.update { it.copy(errorMessage = null) }
+                refreshRules()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.message ?: "Failed to approve routine") }
+            }
+        }
+    }
+
+    /**
+     * Single-tap Pause: Transitions [ruleId] to [RuleApprovalState.PAUSED] and cancels its
+     * background schedule in `RoutineExecutorPort`.
+     */
+    fun pauseRule(ruleId: String) {
+        vmScope.launch {
+            try {
+                container.compileRuleUseCase.pauseRule(
+                    ruleId = ruleId,
+                    nowEpochMs = clockMs()
+                )
+                container.routineExecutor.cancelRule(ruleId)
+                _uiState.update { it.copy(errorMessage = null) }
+                refreshRules()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.message ?: "Failed to pause routine") }
+            }
+        }
+    }
+
+    /**
+     * Single-tap Revoke: Permanently revokes [ruleId] (wiping its HMAC seal) and cancels its
+     * background schedule in `RoutineExecutorPort`.
+     */
+    fun revokeRule(ruleId: String) {
+        vmScope.launch {
+            try {
+                container.compileRuleUseCase.revokeRule(
+                    ruleId = ruleId,
+                    nowEpochMs = clockMs()
+                )
+                container.routineExecutor.cancelRule(ruleId)
+                _uiState.update { it.copy(errorMessage = null) }
+                refreshRules()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.message ?: "Failed to revoke routine") }
+            }
+        }
+    }
+
+    /**
+     * Executes [ruleId] immediately via `RoutineExecutorPort.executeRule`.
+     */
+    fun runRuleNow(ruleId: String) {
+        vmScope.launch {
+            val now = clockMs()
+            val localeTag = container.appLocaleManager.currentLocaleTag()
+            val outcome = container.routineExecutor.executeRule(
+                ruleId = ruleId,
+                nowEpochMs = now,
+                languageTag = localeTag
+            )
+            if (outcome is RoutineExecutionOutcome.EscalatedToInteractive) {
+                val persistedGrant = container.ruleCapabilityGrantManager.findRule(ruleId)
+                if (persistedGrant != null &&
+                    persistedGrant.approvalState == RuleApprovalState.APPROVED_ACTIVE &&
+                    persistedGrant.sealHmacHex.isNotBlank()
+                ) {
+                    container.pendingConfirmationStore.registerEscalatedRoutineConfirmation(
+                        grant = persistedGrant,
+                        requiresBiometric = outcome.requiresBiometric,
+                        languageTag = localeTag,
+                        nowEpochMs = now
+                    )
+                }
+            }
+            val locale = container.appLocaleManager.currentLocale()
+            val (_, body) = container.messageRenderer.render(outcome.message, locale)
+            _uiState.update { state ->
+                state.copy(
+                    lastExecutionOutcome = outcome,
+                    statusMessage = body,
+                    errorMessage = null
+                )
+            }
+        }
+    }
+
+    /**
+     * Toggles the Global Pause switch across `RuleCapabilityGrantManager` and `RoutineExecutorPort`
+     * (Requirement 7):
+     * - When [paused] is `true`, sets `setGlobalRulesPaused(true)`, `routineExecutor.setGloballyPaused(true)`,
+     *   and calls `routineExecutor.cancelAllRules()`.
+     * - When [paused] is `false`, clears the global pause flag and re-schedules all currently
+     *   [RuleApprovalState.APPROVED_ACTIVE] routines.
+     */
+    fun setGlobalRulesPaused(paused: Boolean) {
+        vmScope.launch {
+            container.ruleCapabilityGrantManager.setGlobalRulesPaused(paused)
+            container.routineExecutor.setGloballyPaused(paused)
+            if (paused) {
+                container.routineExecutor.cancelAllRules()
+            } else {
+                val activeGrants = container.compileRuleUseCase.listRules()
+                    .filter { it.approvalState == RuleApprovalState.APPROVED_ACTIVE }
+                for (grant in activeGrants) {
+                    container.routineExecutor.scheduleRule(grant)
+                }
+            }
+            _uiState.update { state ->
+                state.copy(isGlobalPaused = paused, errorMessage = null)
+            }
+            refreshRules()
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        vmScope.cancel()
+    }
+}
