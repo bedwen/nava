@@ -70,6 +70,12 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             viewModel.enqueueSafModelImport(
                 sourceUri = uri.toString(),
                 spec = state.targetImportSpec

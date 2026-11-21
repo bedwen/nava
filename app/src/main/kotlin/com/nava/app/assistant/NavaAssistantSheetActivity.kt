@@ -29,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.nava.app.R
 import com.nava.app.di.AppContainer
@@ -50,6 +52,7 @@ import com.nava.app.security.BiometricPromptLabels
 import com.nava.app.security.NotificationResolutionResult
 import com.nava.app.ui.confirmation.ActionConfirmationCard
 import com.nava.app.ui.hub.NavaHubViewModel
+import com.nava.app.ui.navigation.NavaViewModelFactory
 import com.nava.app.ui.theme.NavaTheme
 import com.nava.app.voice.VoiceInputState
 import java.util.Locale
@@ -79,12 +82,22 @@ class NavaAssistantSheetActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         processIncomingSheetIntent(intent)
 
+        val hubViewModel = ViewModelProvider(
+            this,
+            NavaViewModelFactory(appContainer)
+        )[NavaHubViewModel::class.java]
+
         setContent {
             val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsState()
             val activeLocale = remember(activeLocaleTag) {
                 Locale.forLanguageTag(activeLocaleTag)
             }
-            val hubViewModel = remember(appContainer) { NavaHubViewModel(appContainer) }
+
+            DisposableEffect(appContainer) {
+                onDispose {
+                    appContainer.voiceInputController.cancel()
+                }
+            }
 
             NavaTheme(activeLocale = activeLocale) {
                 NavaAssistantModalSheetContent(
@@ -97,6 +110,11 @@ class NavaAssistantSheetActivity : AppCompatActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        appContainer.voiceInputController.cancel()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

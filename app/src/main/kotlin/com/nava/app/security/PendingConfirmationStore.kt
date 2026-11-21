@@ -396,6 +396,12 @@ class PendingConfirmationStore(
 
     /**
      * Updates a user-edited slot argument in the pending confirmation item identified by [requestId].
+     *
+     * Security invariants:
+     * - Rejects slot mutations for [PendingConfirmationSource.ESCALATED_ROUTINE] (whose actions
+     *   are cryptographically bound to an HMAC-sealed [RuleCapabilityGrant]).
+     * - Catches [SecurityException] from [Gemma4InputSanitizer.sanitize] cleanly and returns `null`
+     *   rather than crashing the UI thread.
      */
     fun updateEditedSlot(
         requestId: String,
@@ -403,9 +409,16 @@ class PendingConfirmationStore(
         newRawValue: String
     ): PendingConfirmationItem? {
         if (requestId.isBlank() || slotName.isBlank()) return null
-        val sanitizedValue = Gemma4InputSanitizer.sanitize(newRawValue).trim()
+        val sanitizedValue = try {
+            Gemma4InputSanitizer.sanitize(newRawValue).trim()
+        } catch (_: SecurityException) {
+            return null
+        }
         return synchronized(stateLock) {
             val current = itemsByRequestId[requestId] ?: return@synchronized null
+            if (current.source == PendingConfirmationSource.ESCALATED_ROUTINE) {
+                return@synchronized null
+            }
             if (slotName !in current.confirmation.canonicalArguments) {
                 return@synchronized null
             }

@@ -22,13 +22,16 @@ import com.nava.domain.automation.BackgroundTaskRequest
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.CapabilityToken
 import com.nava.domain.security.DataProvenance
+import com.nava.domain.security.FirewallDecision
 import com.nava.domain.security.PermissionProfile
+import com.nava.domain.security.RuleActionSpec
+import com.nava.domain.security.RuleApprovalState
 import com.nava.domain.security.RuleCapabilityGrant
 import com.nava.domain.security.Tainted
 import com.nava.domain.tool.SlotValueType
-import com.nava.domain.tool.ToolExecutionContext
 import com.nava.domain.tool.ToolResult
 import com.nava.domain.ui.CoreActivityState
+import com.nava.domain.ui.MessageArg
 import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.NeuralCanvasState
 import com.nava.domain.ui.NeuralPulseEvent
@@ -38,6 +41,7 @@ import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.ToolTargetIds
 import java.util.ArrayDeque
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -109,7 +113,7 @@ class NavaHubViewModel(
         val capabilityToken: CapabilityToken
     )
 
-    private val inFlightPlansByRequestId = LinkedHashMap<String, InFlightPlanContext>()
+    private val inFlightPlansByRequestId = ConcurrentHashMap<String, InFlightPlanContext>()
 
     private val _uiState = MutableStateFlow(createInitialState())
     val uiState: StateFlow<NavaHubUiState> = _uiState.asStateFlow()
@@ -370,30 +374,37 @@ class NavaHubViewModel(
         capabilityToken: CapabilityToken,
         nowEpochMs: Long
     ) {
+        val normalizedCalls = plan.calls.map { call ->
+            if (call.targetId.isNullOrBlank() || call.targetId.equals("default", ignoreCase = true)) {
+                call.copy(targetId = resolveTargetIdForCall(call))
+            } else {
+                call
+            }
+        }
+        val effectivePlan = plan.copy(calls = normalizedCalls)
+
         inFlightPlansByRequestId[capabilityToken.requestId] = InFlightPlanContext(
             intentRequest = intentRequest,
             tier = tier,
-            plan = plan,
+            plan = effectivePlan,
             capabilityToken = capabilityToken
         )
 
-        enqueuePulsesForPlan(plan = plan, tier = tier, timestampEpochMs = nowEpochMs)
+        enqueuePulsesForPlan(plan = effectivePlan, tier = tier, timestampEpochMs = nowEpochMs)
 
-        val primaryNeuron = plan.calls
+        val primaryNeuron = effectivePlan.calls
             .minByOrNull { it.orderIndex }
             ?.let { NeuronToolMapper.neuronForToolCall(it) }
             ?: NeuronNodeId.ROUTINES
         val defaultTargetId = NeuronToolMapper.primaryTargetIdForNeuron(primaryNeuron)
-        val targetIdsByStep = plan.calls.associate { call ->
-            val stepNeuron = NeuronToolMapper.neuronForToolCall(call)
-            val resolvedTarget = call.targetId ?: NeuronToolMapper.primaryTargetIdForNeuron(stepNeuron)
-            call.orderIndex to resolvedTarget
+        val targetIdsByStep = effectivePlan.calls.associate { call ->
+            call.orderIndex to resolveTargetIdForCall(call)
         }
         val localeTag = container.appLocaleManager.currentLocaleTag()
 
         val results = try {
             container.executePlanUseCase(
-                plan = plan,
+                plan = effectivePlan,
                 capabilityToken = capabilityToken,
                 targetId = defaultTargetId,
                 languageTag = localeTag,
@@ -407,7 +418,7 @@ class NavaHubViewModel(
 
         handlePlanExecutionResults(
             requestId = capabilityToken.requestId,
-            plan = plan,
+            plan = effectivePlan,
             capabilityToken = capabilityToken,
             results = results,
             confirmedStepIndices = emptySet(),
@@ -717,10 +728,7 @@ class NavaHubViewModel(
                     val plan = approvedItem.plan ?: return@launch
                     val token = approvedItem.capabilityToken ?: return@launch
                     val targetIdsByStep = plan.calls.associate { call ->
-                        val stepNeuron = NeuronToolMapper.neuronForToolCall(call)
-                        val resolvedTarget = call.targetId
-                            ?: NeuronToolMapper.primaryTargetIdForNeuron(stepNeuron)
-                        call.orderIndex to resolvedTarget
+                        call.orderIndex to resolveTargetIdForCall(call)
                     }
                     val results = try {
                         container.executePlanUseCase(
@@ -731,7 +739,8 @@ class NavaHubViewModel(
                             nowEpochMs = now,
                             confirmedStepIndices = approvedItem.confirmedStepIndices,
                             biometricApprovedStepIndices = approvedItem.biometricApprovedStepIndices,
-                            targetIdsByStep = targetIdsByStep
+                            targetIdsByStep = targetIdsByStep,
+                            startFromOrderIndex = approvedItem.confirmation.pendingOrderIndex
                         )
                     } catch (e: SecurityException) {
                         inFlightPlansByRequestId.remove(requestId)
@@ -758,6 +767,9 @@ class NavaHubViewModel(
                     val taskId = approvedItem.taskId ?: return@launch
                     val plan = approvedItem.plan ?: return@launch
                     val token = approvedItem.capabilityToken ?: return@launch
+                    val targetIdsByStep = plan.calls.associate { call ->
+                        call.orderIndex to resolveTargetIdForCall(call)
+                    }
                     val continuation = BackgroundTaskRequest.PlanContinuation(
                         taskId = taskId,
                         plan = plan,
@@ -766,7 +778,9 @@ class NavaHubViewModel(
                         languageTag = approvedItem.languageTag,
                         enqueuedAtEpochMs = now,
                         confirmedStepIndices = approvedItem.confirmedStepIndices,
-                        biometricApprovedStepIndices = approvedItem.biometricApprovedStepIndices
+                        biometricApprovedStepIndices = approvedItem.biometricApprovedStepIndices,
+                        targetIdsByStep = targetIdsByStep,
+                        startFromOrderIndex = approvedItem.confirmation.pendingOrderIndex
                     )
                     val outcome = container.backgroundTaskContinuationManager.executeNow(
                         request = continuation,
@@ -795,45 +809,180 @@ class NavaHubViewModel(
         item: PendingConfirmationItem,
         nowEpochMs: Long
     ) {
-        val editedCanonical = item.confirmation.canonicalArguments
-        var lastMessage: UserMessage? = null
-        for (action in grant.staticActions) {
-            val tool = container.toolRegistry.find(action.toolName) ?: continue
-            val args = LinkedHashMap<String, Tainted<SlotValueAst>>()
+        val freshGrant = container.ruleCapabilityGrantManager.findRule(grant.ruleId)
+        if (container.ruleCapabilityGrantManager.isGlobalRulesPaused() ||
+            freshGrant == null ||
+            freshGrant.approvalState != RuleApprovalState.APPROVED_ACTIVE ||
+            !container.ruleCapabilityGrantManager.verifySeal(freshGrant)
+        ) {
+            applyUserMessageBanner(
+                message = UserMessage(
+                    key = MessageKey.ROUTINE_EXECUTION_DENIED,
+                    args = listOf(MessageArg.Text(grant.ruleId))
+                ),
+                isError = true
+            )
+            return
+        }
+
+        val ruleDecision = container.securityFirewall.authorizeRuleExecution(freshGrant)
+        if (ruleDecision is FirewallDecision.Denied) {
+            applyUserMessageBanner(
+                message = ruleDecision.message,
+                isError = true
+            )
+            return
+        }
+
+        val calls = ArrayList<ToolCallAst>(freshGrant.staticActions.size)
+        val targetIdsByStep = LinkedHashMap<Int, String>(freshGrant.staticActions.size)
+
+        for ((orderIndex, action) in freshGrant.staticActions.withIndex()) {
+            val tool = container.toolRegistry.find(action.toolName)
+            if (tool == null) {
+                applyUserMessageBanner(
+                    message = UserMessage(
+                        key = MessageKey.ERROR_TOOL_NOT_FOUND,
+                        args = listOf(MessageArg.Text(action.toolName))
+                    ),
+                    isError = true
+                )
+                return
+            }
+            if (action.requiredCapability != tool.metadata.requiredCapability) {
+                applyUserMessageBanner(
+                    message = UserMessage(
+                        key = MessageKey.ROUTINE_EXECUTION_DENIED,
+                        args = listOf(MessageArg.Text(freshGrant.ruleId))
+                    ),
+                    isError = true
+                )
+                return
+            }
+
+            val args = LinkedHashMap<String, Tainted<SlotValueAst>>(action.staticArguments.size)
             for ((k, rawVal) in action.staticArguments) {
-                val effectiveRaw = editedCanonical[k]?.value ?: rawVal
                 val field = tool.metadata.fieldByName(k)
                 val astVal: SlotValueAst = when (field?.valueType) {
-                    SlotValueType.INTEGER -> effectiveRaw.toLongOrNull()?.let(SlotValueAst::IntValue)
-                        ?: SlotValueAst.StringValue(effectiveRaw)
+                    SlotValueType.INTEGER -> rawVal.toLongOrNull()?.let(SlotValueAst::IntValue)
+                        ?: SlotValueAst.StringValue(rawVal)
 
-                    SlotValueType.BOOLEAN -> effectiveRaw.toBooleanStrictOrNull()?.let(SlotValueAst::BooleanValue)
-                        ?: SlotValueAst.StringValue(effectiveRaw)
+                    SlotValueType.BOOLEAN -> rawVal.toBooleanStrictOrNull()?.let(SlotValueAst::BooleanValue)
+                        ?: SlotValueAst.StringValue(rawVal)
 
-                    else -> SlotValueAst.StringValue(effectiveRaw)
+                    else -> SlotValueAst.StringValue(rawVal)
                 }
                 args[k] = Tainted.fromSystem(value = astVal, slotKind = field?.slotKind)
             }
-            val ctx = ToolExecutionContext(
-                requestId = item.requestId,
-                capabilityToken = null,
-                ruleGrant = grant,
-                targetId = ToolTargetIds.ROUTINES,
-                languageTag = item.languageTag,
-                issuedAtEpochMs = nowEpochMs,
-                isUnattendedBackground = false,
-                isUserConfirmed = true,
-                isBiometricApproved = item.requiresBiometric
+
+            val stepTargetId = resolveTargetIdForRoutineAction(action)
+            targetIdsByStep[orderIndex] = stepTargetId
+            calls.add(
+                ToolCallAst(
+                    toolName = action.toolName,
+                    arguments = args,
+                    orderIndex = orderIndex,
+                    targetId = stepTargetId
+                )
             )
-            val result = tool.execute(ctx, args)
-            lastMessage = result.message
-            if (result !is ToolResult.Success) {
-                applyUserMessageBanner(result.message, isError = true)
-                return
-            }
         }
-        if (lastMessage != null) {
-            applyUserMessageBanner(lastMessage, isError = false)
+
+        val plan = PlanAst(
+            planId = "routine_plan_${freshGrant.ruleId}_$nowEpochMs",
+            calls = calls
+        )
+        val candidateTools = freshGrant.staticActions.map { it.toolName }.toSet()
+        val token = try {
+            container.securityFirewall.mintToken(
+                requestId = item.requestId,
+                utteranceProvenance = DataProvenance.USER_UTTERANCE,
+                candidateTools = candidateTools,
+                nowEpochMs = nowEpochMs
+            )
+        } catch (e: SecurityException) {
+            applyUserMessageBanner(
+                message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+                isError = true
+            )
+            return
+        }
+
+        val allStepIndices = (0 until calls.size).toSet()
+        val biometricStepIndices = if (item.requiresBiometric) allStepIndices else emptySet()
+        val defaultTargetId = targetIdsByStep[0] ?: ToolTargetIds.ROUTINES
+
+        val results = try {
+            container.executePlanUseCase(
+                plan = plan,
+                capabilityToken = token,
+                targetId = defaultTargetId,
+                languageTag = item.languageTag,
+                nowEpochMs = nowEpochMs,
+                confirmedStepIndices = allStepIndices,
+                biometricApprovedStepIndices = biometricStepIndices,
+                targetIdsByStep = targetIdsByStep
+            )
+        } catch (e: SecurityException) {
+            applyUserMessageBanner(
+                message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+                isError = true
+            )
+            return
+        }
+
+        handlePlanExecutionResults(
+            requestId = item.requestId,
+            plan = plan,
+            capabilityToken = token,
+            results = results,
+            confirmedStepIndices = allStepIndices,
+            biometricApprovedStepIndices = biometricStepIndices,
+            languageTag = item.languageTag,
+            nowEpochMs = nowEpochMs
+        )
+    }
+
+    private fun resolveTargetIdForCall(call: ToolCallAst): String {
+        val explicit = call.targetId?.trim()
+        if (!explicit.isNullOrEmpty() && !explicit.equals("default", ignoreCase = true)) {
+            return explicit
+        }
+        val stringArgs = call.arguments.mapValues { (_, tainted) -> tainted.value.asDisplayString() }
+        return resolveTargetIdForToolName(call.toolName, stringArgs)
+    }
+
+    private fun resolveTargetIdForRoutineAction(action: RuleActionSpec): String {
+        return resolveTargetIdForToolName(action.toolName, action.staticArguments)
+    }
+
+    private fun resolveTargetIdForToolName(
+        toolName: String,
+        rawArgs: Map<String, String>
+    ): String {
+        return when (toolName) {
+            AutomationToolNames.DIAL_CALL,
+            AutomationToolNames.PLACE_CALL -> ToolTargetIds.PHONE
+
+            AutomationToolNames.SUMMARIZE_NOTIFICATIONS -> ToolTargetIds.NOTIFICATIONS
+
+            AutomationToolNames.LAUNCH_APP -> ToolTargetIds.APP_LAUNCH
+
+            AutomationToolNames.SAF_READ,
+            AutomationToolNames.SAF_WRITE,
+            AutomationToolNames.SAF_DELETE -> {
+                val treeUri = (rawArgs["tree_uri"] ?: rawArgs["treeUri"] ?: rawArgs["uri"])?.trim()
+                if (!treeUri.isNullOrEmpty()) {
+                    ToolTargetIds.forSafTree(treeUri)
+                } else {
+                    val stepNeuron = NeuronToolMapper.neuronForToolName(toolName) ?: NeuronNodeId.FILES
+                    NeuronToolMapper.primaryTargetIdForNeuron(stepNeuron)
+                }
+            }
+
+            else -> {
+                val stepNeuron = NeuronToolMapper.neuronForToolName(toolName) ?: NeuronNodeId.ROUTINES
+                NeuronToolMapper.primaryTargetIdForNeuron(stepNeuron)
+            }
         }
     }
 

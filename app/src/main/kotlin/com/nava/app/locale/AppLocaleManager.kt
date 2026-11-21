@@ -3,7 +3,9 @@ package com.nava.app.locale
 import android.app.LocaleManager
 import android.content.Context
 import android.os.Build
+import android.os.Handler
 import android.os.LocaleList
+import android.os.Looper
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import com.nava.domain.locale.LanguageEntry
@@ -67,7 +69,17 @@ class AndroidPlatformLocaleBridge(
                     return@runCatching
                 }
             }
-            AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(cleaned))
+            val locales = LocaleListCompat.forLanguageTags(cleaned)
+            val mainLooper = runCatching { Looper.getMainLooper() }.getOrNull()
+            if (mainLooper != null && Looper.myLooper() != mainLooper) {
+                Handler(mainLooper).post {
+                    runCatching {
+                        AppCompatDelegate.setApplicationLocales(locales)
+                    }
+                }
+            } else {
+                AppCompatDelegate.setApplicationLocales(locales)
+            }
         }
     }
 

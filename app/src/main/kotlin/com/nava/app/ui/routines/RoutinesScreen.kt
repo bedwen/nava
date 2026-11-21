@@ -43,10 +43,11 @@ import java.util.Locale
 fun RoutinesScreen(
     viewModel: RoutinesViewModel,
     bidiFormatter: BidiTextFormatter,
+    activeLocale: Locale = Locale.forLanguageTag("en"),
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
-    val locale = Locale.getDefault()
+    val locale = activeLocale
 
     Column(
         modifier = modifier
