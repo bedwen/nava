@@ -97,5 +97,14 @@ class AndroidResourceMessageTemplateProvider(
         MessageKey.ACTION_WATCHER_CREATED -> R.string.msg_action_watcher_created
         MessageKey.ACTION_WATCHER_DELETED -> R.string.msg_action_watcher_deleted
         MessageKey.ACTION_WATCHERS_LISTED -> R.string.msg_action_watchers_listed
+        MessageKey.ACTION_FACT_REMEMBERED -> R.string.msg_action_fact_remembered
+        MessageKey.ACTION_FACTS_LISTED -> R.string.msg_action_facts_listed
+        MessageKey.ACTION_FACTS_EMPTY -> R.string.msg_action_facts_empty
+        MessageKey.ACTION_FACT_FORGOTTEN -> R.string.msg_action_fact_forgotten
+        MessageKey.ERROR_MEMORY_FULL -> R.string.msg_error_memory_full
+        MessageKey.ACTION_FLASHLIGHT_ON -> R.string.msg_action_flashlight_on
+        MessageKey.ACTION_FLASHLIGHT_OFF -> R.string.msg_action_flashlight_off
+        MessageKey.ACTION_MEDIA_CONTROLLED -> R.string.msg_action_media_controlled
+        MessageKey.ACTION_SETTINGS_PANEL_OPENED -> R.string.msg_action_settings_panel_opened
     }
 }

@@ -80,10 +80,13 @@ class DailyBriefingBuilder(
                 val calResult = calendarGateway.queryEvents(startOfDayMs, endOfDayMs)
                 if (calResult is CalendarGatewayResult.Success) {
                     for (ev in calResult.value.sortedBy { it.startEpochMs }.take(MAX_ITEMS_PER_SECTION)) {
-                        val timeStr = timeFmt.format(Date(ev.startEpochMs))
                         val cleanTitle = flattenSingleLine(Gemma4InputSanitizer.sanitize(ev.title))
                         if (cleanTitle.isNotEmpty()) {
-                            calendarLines.add("$timeStr - $cleanTitle")
+                            // All-day events are stored at UTC midnight; a local clock time
+                            // (e.g. 03:00 in UTC+3) would be misleading, so they carry no time.
+                            calendarLines.add(
+                                if (ev.allDay) cleanTitle else "${timeFmt.format(Date(ev.startEpochMs))} - $cleanTitle"
+                            )
                             hasUntrusted = true
                         }
                     }

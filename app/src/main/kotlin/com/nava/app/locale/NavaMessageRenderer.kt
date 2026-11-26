@@ -94,6 +94,15 @@ class FallbackEnglishMessageTemplateProvider : MessageTemplateProvider {
         MessageKey.ACTION_WATCHER_CREATED -> "Watcher active: %1\$s"
         MessageKey.ACTION_WATCHER_DELETED -> "Watcher deleted: %1\$s"
         MessageKey.ACTION_WATCHERS_LISTED -> "%1\$s notification watcher(s)"
+        MessageKey.ACTION_FACT_REMEMBERED -> "Got it, I'll remember: %1\$s"
+        MessageKey.ACTION_FACTS_LISTED -> "I remember %1\$s thing(s): %2\$s"
+        MessageKey.ACTION_FACTS_EMPTY -> "I don't remember anything about you yet"
+        MessageKey.ACTION_FACT_FORGOTTEN -> "Forgot %1\$s item(s)"
+        MessageKey.ERROR_MEMORY_FULL -> "Memory is full (%1\$s items); forget something first"
+        MessageKey.ACTION_FLASHLIGHT_ON -> "Flashlight on"
+        MessageKey.ACTION_FLASHLIGHT_OFF -> "Flashlight off"
+        MessageKey.ACTION_MEDIA_CONTROLLED -> "Media command sent"
+        MessageKey.ACTION_SETTINGS_PANEL_OPENED -> "Settings panel opened"
     }
 }
 

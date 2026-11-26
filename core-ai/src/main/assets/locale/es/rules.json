@@ -127,6 +127,233 @@
       "slotMappings": {},
       "staticSlots": {},
       "priority": 110
+    },
+    {
+      "patternId": "es_set_alarm_compact_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?(?:(?:pon|configura|crea|programa) )?(?:una )?alarma (?:a la |a las |para las |para la )?(\\d{1,2}):(\\d{2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 112
+    },
+    {
+      "patternId": "es_set_alarm_compact_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?(?:(?:pon|configura|crea|programa) )?(?:una )?alarma (?:a la |a las |para las |para la )?(\\d{1,2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 104
+    },
+    {
+      "patternId": "es_wake_me_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?despiertame (?:manana )?(?:a la |a las )?(\\d{1,2}):(\\d{2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 113
+    },
+    {
+      "patternId": "es_wake_me_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:por favor )?despiertame (?:manana )?(?:a la |a las )?(\\d{1,2})(?: de la (manana|tarde|noche))?[?!]?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 103
+    },
+    {
+      "patternId": "es_set_timer_compact",
+      "toolName": "set_timer",
+      "regexPattern": "^(?:por favor )?(?:(?:pon|inicia|crea|programa) )?(?:un )?temporizador (?:de |para )?(\\d{1,4}) (segundos?|minutos?|horas?)[?!]?$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 108
+    },
+    {
+      "patternId": "es_set_volume_flexible",
+      "toolName": "set_volume",
+      "regexPattern": "^(?:por favor )?(?:(?:pon|ajusta|cambia|sube|baja) )?(?:el )?volumen (?:al |a |en )?(\\d{1,3})(?:%| por ciento)?[?!]?$",
+      "slotMappings": {
+        "level": "1"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "es_set_dnd_silence",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:por favor )?(?:silencia (?:el |mi )?(?:telefono|movil)|pon (?:el |mi )?(?:telefono|movil) en silencio)[?!]?$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 105
+    },
+    {
+      "patternId": "es_schedule_reminder_title_first",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:por favor )?recuerdame (?:que )?([a-z0-9][a-z0-9 .,'_-]{0,80}?) en (\\d{1,4}) (?:minutos?|mins?)$",
+      "slotMappings": {
+        "title": "1",
+        "delay_minutes": "2"
+      },
+      "staticSlots": {},
+      "priority": 118
+    },
+    {
+      "patternId": "es_schedule_reminder_in_min_first",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:por favor )?en (\\d{1,4}) (?:minutos?|mins?) recuerdame (?:que )?([a-z0-9][a-z0-9 .,'_-]{0,80}?)$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 118
+    },
+    {
+      "patternId": "es_remember_fact_0",
+      "toolName": "remember_fact",
+      "regexPattern": "^(?:por favor )?recuerda(?: que)? (.{3,200}?)$",
+      "slotMappings": {
+        "fact": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "es_recall_facts_0",
+      "toolName": "recall_facts",
+      "regexPattern": "^que (?:recuerdas|sabes) (?:de|sobre) mi ?[?؟]?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "es_forget_fact_0",
+      "toolName": "forget_fact",
+      "regexPattern": "^olvida(?: que)? (.{2,80}?)$",
+      "slotMappings": {
+        "query": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "es_flashlight_on_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:por favor )?enciende (?:la )?linterna$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_flashlight_off_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:por favor )?apaga (?:la )?linterna$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "false"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_media_pause_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:pausa|deten|para) (?:la )?musica$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "pause"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_media_play_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:reanuda|pon) (?:la )?musica$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "play"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_media_next_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:siguiente cancion|salta (?:la |esta )?cancion)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "next"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_media_previous_0",
+      "toolName": "media_control",
+      "regexPattern": "^cancion anterior$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "previous"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_settings_panel_wifi_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^abre (?:los )?ajustes de (?:wifi|wi-fi)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "wifi"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_settings_panel_bluetooth_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^abre (?:los )?ajustes de bluetooth$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "bluetooth"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_settings_panel_internet_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^abre (?:los )?ajustes de internet$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "internet"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "es_settings_panel_volume_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^abre (?:los )?ajustes de (?:volumen|sonido)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "volume"
+      },
+      "priority": 116
     }
   ],
   "conversationalPatterns": [
@@ -154,5 +381,13 @@
       "replyText": "De nada. Avísame si necesitas algo más.",
       "priority": 100
     }
-  ]
+  ],
+  "toolHints": {
+    "remember_fact": ["recuerda", "memoriza"],
+    "recall_facts": ["recuerdas", "sabes"],
+    "forget_fact": ["olvida"],
+    "set_flashlight": ["linterna"],
+    "media_control": ["musica", "cancion", "pausa", "siguiente"],
+    "open_settings_panel": ["wifi", "bluetooth", "internet", "ajustes"]
+  }
 }

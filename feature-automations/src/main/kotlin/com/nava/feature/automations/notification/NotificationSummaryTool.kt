@@ -44,7 +44,8 @@ enum class NotificationUrgency {
  * `DailyBriefingBuilder`.
  */
 object NotificationUrgencyClassifier {
-    private val OTP_REGEX = Regex("\\b\\d{4,8}\\b")
+    // 4-8 digit one-time codes; calendar years (1900-2099) in promotional text are not codes.
+    private val OTP_REGEX = Regex("\\b(?!(?:19|20)\\d{2}\\b)\\d{4,8}\\b")
 
     private val URGENT_KEYWORDS = setOf(
         "otp", "code", "verify", "verification", "security", "alert", "urgent",

@@ -18,6 +18,10 @@ object ToolTargetIds {
     const val ROUTINES: String = "nava.routines"
     const val REMINDERS: String = "nava.reminders"
     const val BACKGROUND_TASKS: String = "nava.background_tasks"
+    const val MEMORY: String = "nava.memory"
+    const val FLASHLIGHT: String = "system.flashlight"
+    const val MEDIA: String = "system.media"
+    const val SETTINGS_PANEL: String = "system.settings_panel"
 
     /**
      * Canonical per-directory target ID for SAF permission evaluation so each user-granted tree

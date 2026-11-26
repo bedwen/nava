@@ -77,6 +77,8 @@ class OutboundChannelPolicy {
 
             ACTION_APP_LAUNCH -> validatePackageName(uriOrTarget, normTarget)
 
+            ACTION_SETTINGS_PANEL -> validateSettingsPanel(normTarget)
+
             else -> OutboundPolicyVerdict.Blocked(
                 reasonCode = REASON_ACTION_BLOCKED,
                 detail = "Action '$normAction' is not permitted"
@@ -270,6 +272,18 @@ class OutboundChannelPolicy {
         return OutboundPolicyVerdict.Allowed
     }
 
+    /** Settings panels are opened from a fixed template set; no URI or free-form target is accepted. */
+    private fun validateSettingsPanel(normTarget: String): OutboundPolicyVerdict {
+        return if (normTarget in ALLOWED_SETTINGS_PANELS) {
+            OutboundPolicyVerdict.Allowed
+        } else {
+            OutboundPolicyVerdict.Blocked(
+                reasonCode = REASON_SCHEME_BLOCKED,
+                detail = "SETTINGS_PANEL target must be one of $ALLOWED_SETTINGS_PANELS"
+            )
+        }
+    }
+
     private fun validatePackageName(rawTarget: String, normTarget: String): OutboundPolicyVerdict {
         if (
             containsRawControlOrHeaderInjection(rawTarget) ||
@@ -453,6 +467,10 @@ class OutboundChannelPolicy {
         const val ACTION_SAF_WRITE: String = "SAF_WRITE"
         const val ACTION_CALENDAR_PROVIDER: String = "CALENDAR_PROVIDER"
         const val ACTION_APP_LAUNCH: String = "APP_LAUNCH"
+        const val ACTION_SETTINGS_PANEL: String = "SETTINGS_PANEL"
+
+        /** Static settings panel templates (exact, lowercase). */
+        val ALLOWED_SETTINGS_PANELS: Set<String> = setOf("internet", "wifi", "bluetooth", "volume")
 
         private const val CALENDAR_URI_PREFIX: String = "content://com.android.calendar"
         private const val MAX_PERCENT_DECODE_PASSES: Int = 5
@@ -467,7 +485,8 @@ class OutboundChannelPolicy {
             ACTION_SAF_READ,
             ACTION_SAF_WRITE,
             ACTION_CALENDAR_PROVIDER,
-            ACTION_APP_LAUNCH
+            ACTION_APP_LAUNCH,
+            ACTION_SETTINGS_PANEL
         )
 
         private val HTTP_SCHEME_REGEX: Regex = Regex(

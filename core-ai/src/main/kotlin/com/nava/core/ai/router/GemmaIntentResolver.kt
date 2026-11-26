@@ -62,7 +62,8 @@ class GemmaIntentResolver(
     private val rulePackLoader: LocaleRulePackLoader? = null,
     private val diagnosticsSink: LlmTurnDiagnosticsSink? = null,
     private val monotonicClockMs: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
-    private val embeddingPort: EmbeddingPort? = null
+    private val embeddingPort: EmbeddingPort? = null,
+    private val personalMemory: com.nava.domain.memory.PersonalMemoryPort? = null
 ) : IntentResolver {
 
     override val tier: ResolutionTier = ResolutionTier.TIER_3_GEMMA
@@ -141,6 +142,17 @@ class GemmaIntentResolver(
         }
 
         val currentLocalDateTimeIso = ToolPlanValidator.formatNowIso(request.issuedAtEpochMs)
+        // Remembered facts are user-authored (stored only from USER_UTTERANCE slots); a locked
+        // or failing store simply means no memory context for this turn.
+        val userFacts = personalMemory?.let { port ->
+            try {
+                com.nava.domain.memory.PersonalFactContext.select(port.listFacts())
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }.orEmpty()
 
         val generationRequest = LlmGenerationRequest(
             requestId = request.requestId,
@@ -153,7 +165,8 @@ class GemmaIntentResolver(
             maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
             stage2BlindExtractionMode = false,
             conversationHistory = request.conversationHistory,
-            currentLocalDateTimeIso = currentLocalDateTimeIso
+            currentLocalDateTimeIso = currentLocalDateTimeIso,
+            userFacts = userFacts
         )
 
         fun diagnose(
@@ -435,11 +448,13 @@ class GemmaIntentResolver(
         request: IntentRequest,
         prunedTools: List<ToolMetadata>
     ): Boolean {
-        val hasCalendarTool = prunedTools.any {
-            it.name.startsWith("calendar_") &&
-                it.fields.any { f -> f.valueType == SlotValueType.ISO_DATETIME || f.valueType == SlotValueType.ISO_DATE }
-        }
-        if (!hasCalendarTool) return false
+        // Only the top-ranked tool counts: the pruner pads the set with lower-scored neighbours,
+        // and a calendar tool ranked behind set_alarm must not switch thought mode on for a
+        // plain clock command.
+        val topTool = prunedTools.firstOrNull() ?: return false
+        val topIsCalendarDateTool = topTool.name.startsWith("calendar_") &&
+            topTool.fields.any { f -> f.valueType == SlotValueType.ISO_DATETIME || f.valueType == SlotValueType.ISO_DATE }
+        if (!topIsCalendarDateTool) return false
         return NUMERIC_GROUP_REGEX.containsMatchIn(request.rawUtterance)
     }
 

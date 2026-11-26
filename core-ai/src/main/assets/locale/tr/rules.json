@@ -16,7 +16,7 @@
     {
       "patternId": "tr_set_alarm_hhmm_period",
       "toolName": "set_alarm",
-      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})[:.](\\d{2})(?:'?(?:a|e|ya|ye))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
+      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})[:.](\\d{2})(?:'?(?:a|e|ya|ye|de|da|te|ta))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
       "slotMappings": {
         "period_keyword": "1",
         "hour": "2",
@@ -29,7 +29,7 @@
     {
       "patternId": "tr_set_alarm_hour_period",
       "toolName": "set_alarm",
-      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?:'?(?:a|e|ya|ye))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
+      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?:'?(?:a|e|ya|ye|de|da|te|ta))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
       "slotMappings": {
         "period_keyword": "1",
         "hour": "2",
@@ -150,6 +150,261 @@
       "slotMappings": {},
       "staticSlots": {},
       "priority": 110
+    },
+    {
+      "patternId": "tr_set_alarm_verb_first_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:bir )?alarmi? (?:kur|ekle|ayarla) (?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})[:.](\\d{2})(?:'?(?:a|e|ya|ye|de|da|te|ta))?(?: icin)?$",
+      "slotMappings": {
+        "period_keyword": "1",
+        "hour": "2",
+        "minute": "3"
+      },
+      "staticSlots": {},
+      "priority": 119
+    },
+    {
+      "patternId": "tr_set_alarm_verb_first_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:bir )?alarmi? (?:kur|ekle|ayarla) (?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?:'?(?:a|e|ya|ye|de|da|te|ta))?(?: icin)?$",
+      "slotMappings": {
+        "period_keyword": "1",
+        "hour": "2"
+      },
+      "staticSlots": {},
+      "priority": 109
+    },
+    {
+      "patternId": "tr_set_alarm_wake_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:beni )?(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})[:.](\\d{2})(?:'?(?:a|e|ya|ye|de|da|te|ta))? (?:beni )?uyandir$",
+      "slotMappings": {
+        "period_keyword": "1",
+        "hour": "2",
+        "minute": "3"
+      },
+      "staticSlots": {},
+      "priority": 117
+    },
+    {
+      "patternId": "tr_set_alarm_wake_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:beni )?(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?:'?(?:a|e|ya|ye|de|da|te|ta))? (?:beni )?uyandir$",
+      "slotMappings": {
+        "period_keyword": "1",
+        "hour": "2"
+      },
+      "staticSlots": {},
+      "priority": 107
+    },
+    {
+      "patternId": "tr_set_timer_verb_first",
+      "toolName": "set_timer",
+      "regexPattern": "^(?:bir )?(?:zamanlayici|sayac) (?:kur|baslat|ayarla) (\\d{1,4}) (saniye|dakika|dk|saat)(?:lik|luk)?$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 109
+    },
+    {
+      "patternId": "tr_set_timer_noun",
+      "toolName": "set_timer",
+      "regexPattern": "^(\\d{1,4}) (saniye|dakika|dk|saat)(?:lik|luk)? (?:bir )?(?:zamanlayici|sayac)(?: (?:kur|baslat|ayarla))?$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 108
+    },
+    {
+      "patternId": "tr_set_volume_flexible",
+      "toolName": "set_volume",
+      "regexPattern": "^(?:sesi|ses seviyesini|ses) (?:yuzde )?%?(\\d{1,3})(?:'?(?:e|a|ye|ya))?(?: (?:yap|olarak ayarla|ayarla|getir|cek))?$",
+      "slotMappings": {
+        "level": "1"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "tr_set_dnd_silence",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:telefonu )?sessize al$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 105
+    },
+    {
+      "patternId": "tr_schedule_reminder_bana_diye",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(\\d{1,4}) (?:dakika|dk) (?:sonra|icinde) (?:bana )?([a-z0-9][a-z0-9 .,'_-]{0,80}?)(?: diye)? (?:hatirlat|hatirlatici kur|hatirlatma kur)$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 121
+    },
+    {
+      "patternId": "tr_remember_fact_0",
+      "toolName": "remember_fact",
+      "regexPattern": "^(.{3,200}?)[,.]? (?:bunu )?(?:aklinda tut|hatirla)$",
+      "slotMappings": {
+        "fact": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "tr_remember_fact_1",
+      "toolName": "remember_fact",
+      "regexPattern": "^(?:sunu |bunu )?(?:hatirla|aklinda tut)[:,]? (.{3,200}?)$",
+      "slotMappings": {
+        "fact": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "tr_recall_facts_0",
+      "toolName": "recall_facts",
+      "regexPattern": "^(?:benim hakkimda )?(?:neler|ne) (?:hatirliyorsun|biliyorsun) ?[?؟]?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "tr_recall_facts_1",
+      "toolName": "recall_facts",
+      "regexPattern": "^(?:hatirladiklarini|hafizani|bellegini) (?:goster|listele|soyle)$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "tr_forget_fact_0",
+      "toolName": "forget_fact",
+      "regexPattern": "^(.{2,80}?) (?:bilgisini )?unut$",
+      "slotMappings": {
+        "query": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "tr_flashlight_on_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:lutfen )?(?:feneri|el fenerini|flasi|fener) (?:ac|yak)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_flashlight_off_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:lutfen )?(?:feneri|el fenerini|flasi|fener) (?:kapat|sondur)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "false"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_media_pause_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:muzigi|sarkiyi|muzik|sarki) (?:durdur|duraklat)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "pause"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_media_play_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:muzigi|sarkiyi|muzik) (?:devam ettir|oynat|cal|baslat)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "play"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_media_next_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:sonraki|siradaki) (?:sarki|sarkiya gec|parca|parcaya gec)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "next"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_media_next_1",
+      "toolName": "media_control",
+      "regexPattern": "^(?:sarkiyi|parcayi) (?:gec|atla)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "next"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_media_previous_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:onceki) (?:sarki|sarkiya don|parca)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "previous"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_settings_panel_wifi_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^(?:wifi|wi-fi|kablosuz)(?: ayarlarini| panelini| ayarlari)? (?:ac|goster)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "wifi"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_settings_panel_bluetooth_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^bluetooth(?: ayarlarini| panelini| ayarlari)? (?:ac|goster)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "bluetooth"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_settings_panel_internet_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^internet(?: ayarlarini| panelini| baglantisini)? (?:ac|goster)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "internet"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "tr_settings_panel_volume_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^ses (?:ayarlarini|panelini) (?:ac|goster)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "volume"
+      },
+      "priority": 116
     }
   ],
   "conversationalPatterns": [
@@ -212,6 +467,12 @@
     "manage_notification_watchers": ["nobetci", "nobetciler", "uyari", "uyarilar", "takip"],
     "saf_read": ["dosya", "dosyalar", "klasor", "belge"],
     "saf_write": ["dosya", "klasor", "belge", "kaydet"],
-    "saf_delete": ["dosya", "belge", "sil"]
+    "saf_delete": ["dosya", "belge", "sil"],
+    "remember_fact": ["hatirla", "aklinda", "tut", "bellek", "hafiza"],
+    "recall_facts": ["hatirliyorsun", "biliyorsun", "hakkimda", "hafiza", "bellek"],
+    "forget_fact": ["unut", "sil", "bellek"],
+    "set_flashlight": ["fener", "flas", "isik"],
+    "media_control": ["muzik", "sarki", "parca", "durdur", "oynat", "gec"],
+    "open_settings_panel": ["wifi", "bluetooth", "internet", "ayarlar", "panel"]
   }
 }

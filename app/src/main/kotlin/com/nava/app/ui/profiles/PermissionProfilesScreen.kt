@@ -224,7 +224,9 @@ fun PermissionProfilesScreen(
     val activeFeaturesCount = remember(allFeatureTargets, state.targetProfilesById) {
         allFeatureTargets.count { targetId ->
             val p = state.targetProfilesById[targetId]
-            p != null && p.capabilities.values.any { it.isAllowed }
+            // A feature counts as active only when one of its primary capabilities is on; an
+            // unrelated switch (e.g. read access) must not make the clock look usable.
+            p != null && viewModel.primaryCapabilitiesForTarget(targetId).any { p.levelFor(it).isAllowed }
         }
     }
 
@@ -354,7 +356,7 @@ fun PermissionProfilesScreen(
                                 val targetProfile = state.targetProfilesById[targetId]
                                     ?: PermissionProfile.defaultDeny()
                                 val primaryCaps = viewModel.primaryCapabilitiesForTarget(targetId)
-                                val hasAnyAllowed = targetProfile.capabilities.values.any { it.isAllowed }
+                                val hasAnyAllowed = primaryCaps.any { targetProfile.levelFor(it).isAllowed }
                                 val missingOsPerm = isTargetMissingOsPermission(targetId, state)
 
                                 Row(
@@ -1333,15 +1335,9 @@ private fun featureStatusSummaryLabel(
         .map { it to profile.levelFor(it) }
         .filter { (_, lvl) -> lvl.isAllowed }
     if (activePrimary.isEmpty()) {
-        val anyOther = profile.capabilities.entries.filter { it.value.isAllowed }
-        if (anyOther.isEmpty()) {
-            return stringResource(R.string.perm_level_off)
-        }
-        val labels = ArrayList<String>(anyOther.size)
-        for (entry in anyOther) {
-            labels.add(localizedCapabilityBadge(entry.key))
-        }
-        return labels.joinToString(" / ")
+        // The feature's own action is off: say so, instead of listing unrelated switches that
+        // would make it look enabled.
+        return stringResource(R.string.perm_level_off)
     }
     val distinctLevels = activePrimary.map { it.second }.distinct()
     if (activePrimary.size == primaryCaps.size && distinctLevels.size == 1) {
@@ -1424,7 +1420,7 @@ private fun PermissionSyncBanner(
 }
 
 @Composable
-private fun localizedTargetLabel(targetId: String): String {
+internal fun localizedTargetLabel(targetId: String): String {
     return when (targetId) {
         "system.clock" -> stringResource(R.string.canvas_neuron_clock)
         "nava.reminders", "system.reminders" -> stringResource(R.string.target_label_reminders)
@@ -1438,6 +1434,10 @@ private fun localizedTargetLabel(targetId: String): String {
         "system.app_launch" -> stringResource(R.string.target_label_app_launch)
         "system.saf" -> stringResource(R.string.canvas_neuron_files)
         "nava.routines" -> stringResource(R.string.canvas_neuron_routines)
+        "nava.memory" -> stringResource(R.string.target_label_memory)
+        "system.flashlight" -> stringResource(R.string.target_label_flashlight)
+        "system.media" -> stringResource(R.string.target_label_media)
+        "system.settings_panel" -> stringResource(R.string.target_label_settings_panel)
         else -> if (targetId.startsWith("saf:")) {
             targetId.removePrefix("saf:").substringAfterLast('/').substringAfterLast("%2F")
         } else {
@@ -1461,12 +1461,16 @@ private fun localizedTargetDescription(targetId: String): String {
         "system.app_launch" -> stringResource(R.string.target_desc_app_launch)
         "system.saf" -> stringResource(R.string.target_desc_saf)
         "nava.routines" -> stringResource(R.string.target_desc_routines)
+        "nava.memory" -> stringResource(R.string.target_desc_memory)
+        "system.flashlight" -> stringResource(R.string.target_desc_flashlight)
+        "system.media" -> stringResource(R.string.target_desc_media)
+        "system.settings_panel" -> stringResource(R.string.target_desc_settings_panel)
         else -> stringResource(R.string.target_desc_saf)
     }
 }
 
 @Composable
-private fun localizedCapabilityTitle(capability: AtomicCapability): String {
+internal fun localizedCapabilityTitle(capability: AtomicCapability): String {
     return when (capability) {
         AtomicCapability.NOTIFICATION_READ -> stringResource(R.string.capability_notification_read)
         AtomicCapability.DATA_READ -> stringResource(R.string.capability_data_read)

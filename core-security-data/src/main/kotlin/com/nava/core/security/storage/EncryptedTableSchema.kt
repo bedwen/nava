@@ -11,7 +11,7 @@ package com.nava.core.security.storage
  */
 object EncryptedTableSchema {
     const val DATABASE_NAME: String = "nava_encrypted_store.db"
-    const val DATABASE_VERSION: Int = 3
+    const val DATABASE_VERSION: Int = 4
 
     const val TABLE_ACTION_CACHE: String = "action_cache"
     const val TABLE_AUTOMATION_RULES: String = "automation_rules"
@@ -21,6 +21,7 @@ object EncryptedTableSchema {
     const val TABLE_ENCRYPTED_NOTES: String = "encrypted_notes"
     const val TABLE_SCHEDULED_REMINDERS: String = "scheduled_reminders"
     const val TABLE_NOTIFICATION_WATCHERS: String = "notification_watchers"
+    const val TABLE_PERSONAL_FACTS: String = "personal_facts"
 
     /** Internal monotonic row-ID allocator table (not exposed to caller allowlist). */
     internal const val TABLE_ROW_SEQUENCES: String = "nava_row_sequences"
@@ -44,7 +45,8 @@ object EncryptedTableSchema {
         TABLE_AUDIT_LOGS,
         TABLE_ENCRYPTED_NOTES,
         TABLE_SCHEDULED_REMINDERS,
-        TABLE_NOTIFICATION_WATCHERS
+        TABLE_NOTIFICATION_WATCHERS,
+        TABLE_PERSONAL_FACTS
     )
 
     /** Throws [IllegalArgumentException] if [tableName] is not in [ALLOWED_TABLES]. */

@@ -18,7 +18,12 @@ data class LlmGenerationRequest(
     val maxOutputTokens: Int = 512,
     val stage2BlindExtractionMode: Boolean = false,
     val conversationHistory: List<ConversationTurn> = emptyList(),
-    val currentLocalDateTimeIso: String? = null
+    val currentLocalDateTimeIso: String? = null,
+    /**
+     * Bounded user-authored facts (see `PersonalFactContext`) shown to the planner as context.
+     * Always empty in Stage 2 blind extraction.
+     */
+    val userFacts: List<String> = emptyList()
 ) {
     init {
         require(requestId.isNotBlank()) { "requestId must not be blank" }
@@ -31,6 +36,9 @@ data class LlmGenerationRequest(
         }
         require(!stage2BlindExtractionMode || conversationHistory.isEmpty()) {
             "Stage 2 blind extraction mode requires empty conversationHistory"
+        }
+        require(!stage2BlindExtractionMode || userFacts.isEmpty()) {
+            "Stage 2 blind extraction mode requires empty userFacts"
         }
     }
 }
@@ -66,5 +74,12 @@ interface LlmEnginePort {
     suspend fun generate(request: LlmGenerationRequest): LlmGenerationResult
     fun generateStream(request: LlmGenerationRequest): Flow<LlmStreamChunk>
     suspend fun resetChatSession() {}
+
+    /**
+     * Optionally loads weights and the [systemPrefixId] prefix ahead of the first turn.
+     * Returns true only if the model is resident afterwards. Implementations must honor the
+     * same thermal/battery/RAM unload policy as a normal turn. Default: no prewarming.
+     */
+    suspend fun prewarm(systemPrefixId: String): Boolean = false
     suspend fun unloadModel()
 }

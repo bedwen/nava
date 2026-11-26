@@ -26,8 +26,8 @@ class AndroidResourceMessageTemplateProviderTest {
     }
 
     @Test
-    fun totalMessageKeysCountIsExactly62() {
-        assertEquals("MessageKey enum must contain exactly 62 entries", 62, MessageKey.entries.size)
+    fun totalMessageKeysCountIsExactly71() {
+        assertEquals("MessageKey enum must contain exactly 71 entries", 71, MessageKey.entries.size)
     }
 
     @Test

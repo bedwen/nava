@@ -66,6 +66,42 @@ class ManageProfilesUseCase(
         return updated
     }
 
+    /**
+     * Sets [capability] to [level] for [targetId] alone (used by the just-in-time grant on a
+     * denial card). Unless [targetId] is already bound to its own per-target profile, the
+     * current profile is copied into a fresh per-target profile first, so a one-tap grant can
+     * never silently widen the permissions of other targets sharing a preset or custom profile.
+     *
+     * @throws IllegalArgumentException when [level] is not structurally valid for [capability]
+     *   (for example `AUTO` for `MODIFY_DELETE_SEND`).
+     */
+    suspend fun setCapabilityForTarget(
+        targetId: String,
+        capability: AtomicCapability,
+        level: ConfirmationLevel,
+        nowEpochMs: Long
+    ): PermissionProfile {
+        require(targetId.isNotBlank()) { "targetId must not be blank" }
+        require(level.isValidFor(capability)) {
+            "ConfirmationLevel $level is not allowed for capability $capability"
+        }
+        val current = permissionEvaluator.getProfileForTarget(targetId)
+        val ownId = perTargetProfileId(targetId)
+        if (current.id == ownId) {
+            return setCapabilityLevel(current, capability, level, nowEpochMs)
+        }
+        val forked = current.withCapability(
+            capability = capability,
+            level = level,
+            updatedAtEpochSec = nowEpochMs / 1000L,
+            newProfileId = ownId,
+            newProfileName = "${current.name} ($targetId)"
+        )
+        saveProfile(forked, nowEpochMs)
+        assignTarget(targetId = targetId, profileId = ownId, nowEpochMs = nowEpochMs)
+        return forked
+    }
+
     suspend fun assignTarget(targetId: String, profileId: String, nowEpochMs: Long) {
         permissionEvaluator.assignTargetToProfile(targetId, profileId)
         auditLog.record(
@@ -95,5 +131,17 @@ class ManageProfilesUseCase(
                 decision = "PROFILE_DELETED"
             )
         )
+    }
+
+    companion object {
+        /**
+         * Collision-safe deterministic per-target profile id: sanitized prefix plus a hash of the
+         * full target id. Shared with the permission profiles screen so both edit the same profile.
+         */
+        fun perTargetProfileId(targetId: String): String {
+            val prefix = targetId.replace(Regex("[^A-Za-z0-9_]"), "_").take(32)
+            val hash = targetId.hashCode().toUInt().toString(16) + targetId.length.toString(16)
+            return "custom_target_${prefix}_$hash"
+        }
     }
 }

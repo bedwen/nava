@@ -96,7 +96,11 @@ data class PermissionProfilesUiState(
             ToolTargetIds.AUDIO_DND,
             ToolTargetIds.APP_LAUNCH,
             ToolTargetIds.SAF,
-            ToolTargetIds.ROUTINES
+            ToolTargetIds.ROUTINES,
+            ToolTargetIds.MEMORY,
+            ToolTargetIds.FLASHLIGHT,
+            ToolTargetIds.MEDIA,
+            ToolTargetIds.SETTINGS_PANEL
         )
     }
 }
@@ -448,6 +452,14 @@ class PermissionProfilesViewModel(
                 AtomicCapability.MODIFY_DELETE_SEND
             )
             targetId == ToolTargetIds.ROUTINES -> listOf(AtomicCapability.CREATE_DRAFT)
+            targetId == ToolTargetIds.MEMORY -> listOf(
+                AtomicCapability.DATA_READ,
+                AtomicCapability.CREATE_DRAFT,
+                AtomicCapability.MODIFY_DELETE_SEND
+            )
+            targetId == ToolTargetIds.FLASHLIGHT || targetId == ToolTargetIds.MEDIA ->
+                listOf(AtomicCapability.CREATE_DRAFT)
+            targetId == ToolTargetIds.SETTINGS_PANEL -> listOf(AtomicCapability.APP_LAUNCH)
             else -> listOf(
                 AtomicCapability.NOTIFICATION_READ,
                 AtomicCapability.APP_LAUNCH
@@ -711,11 +723,8 @@ class PermissionProfilesViewModel(
     }
 
     /** Collision-safe deterministic custom profile id: sanitized prefix plus hash of the full target id. */
-    private fun customTargetProfileId(targetId: String): String {
-        val prefix = targetId.replace(Regex("[^A-Za-z0-9_]"), "_").take(32)
-        val hash = Integer.toHexString(targetId.hashCode()) + Integer.toHexString(targetId.length)
-        return "custom_target_${prefix}_$hash"
-    }
+    private fun customTargetProfileId(targetId: String): String =
+        com.nava.domain.usecase.ManageProfilesUseCase.perTargetProfileId(targetId)
 
     /**
      * Creates and saves a new custom [PermissionProfile] derived from [baseProfileId].

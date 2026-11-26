@@ -107,6 +107,22 @@ fun VaultScreen(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
+        TodayOverviewSection(
+            overview = routinesState.todayOverview,
+            bidiFormatter = bidiFormatter,
+            activeLocale = activeLocale
+        )
+
+        PersonalMemorySection(
+            facts = routinesState.personalFacts,
+            bidiFormatter = bidiFormatter,
+            activeLocale = activeLocale,
+            onForget = { id ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                routinesViewModel.forgetPersonalFact(id)
+            }
+        )
+
         // Section 0: Proactive Notification Watchers (Zero-Battery Passive Alerts)
         NotificationWatchersSection(
             watchers = routinesState.notificationWatchers,

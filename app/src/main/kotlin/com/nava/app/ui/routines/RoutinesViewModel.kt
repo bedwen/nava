@@ -77,6 +77,10 @@ data class RoutinesUiState(
     val morningBriefingConfig: MorningBriefingConfig = MorningBriefingConfig(),
     val activeReminders: List<ScheduledReminder> = emptyList(),
     val notificationWatchers: List<NotificationWatcher> = emptyList(),
+    /** Today's permission-filtered calendar, reminders and urgent notifications for My Day. */
+    val todayOverview: com.nava.feature.automations.briefing.DailyBriefingResult? = null,
+    /** Facts the user asked Nava to remember, newest first. */
+    val personalFacts: List<com.nava.domain.memory.PersonalFact> = emptyList(),
     val lastExecutionOutcome: RoutineExecutionOutcome? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null
@@ -120,6 +124,15 @@ class RoutinesViewModel(
             val briefingConfig = container.morningBriefingPreferencesStore.currentConfig()
             val watchers = runCatching { container.notificationWatcherPort.listWatchers() }
                 .getOrDefault(emptyList())
+            // Always build the full view (independent of the morning-briefing toggles); the
+            // builder still applies each source's permission profile.
+            val today = runCatching {
+                container.dailyBriefingBuilder.buildBriefing(
+                    nowEpochMs = clockMs(),
+                    config = MorningBriefingConfig(enabled = true)
+                )
+            }.getOrNull()
+            val facts = runCatching { container.personalFactDao.listFacts() }.getOrDefault(emptyList())
 
             _uiState.update { state ->
                 state.copy(
@@ -128,6 +141,8 @@ class RoutinesViewModel(
                     activeRules = active,
                     pausedRules = paused,
                     revokedRules = revoked,
+                    todayOverview = today,
+                    personalFacts = facts,
                     consentCards = consentModels,
                     isGlobalPaused = globalPaused,
                     morningBriefingConfig = briefingConfig,
@@ -184,6 +199,26 @@ class RoutinesViewModel(
     fun setNotificationWatcherEnabled(watcherId: String, enabled: Boolean) {
         vmScope.launch {
             container.notificationWatcherPort.setWatcherEnabled(watcherId, enabled)
+            refreshRules()
+        }
+    }
+
+    /** Deletes one remembered fact by direct user action on My Day, and audits it. */
+    fun forgetPersonalFact(factId: String) {
+        vmScope.launch {
+            val removed = runCatching { container.personalFactDao.deleteFact(factId) }.getOrDefault(false)
+            if (removed) {
+                container.auditLogDao.record(
+                    com.nava.domain.security.AuditLogEntry(
+                        timestampEpochMs = clockMs(),
+                        toolName = com.nava.feature.automations.common.AutomationToolNames.FORGET_FACT,
+                        targetId = com.nava.feature.automations.common.ToolTargetIds.MEMORY,
+                        actionSummary = "Forgot a personal fact from My Day",
+                        provenance = DataProvenance.USER_UTTERANCE,
+                        decision = "SUCCESS"
+                    )
+                )
+            }
             refreshRules()
         }
     }

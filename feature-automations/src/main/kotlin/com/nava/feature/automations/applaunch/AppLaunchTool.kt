@@ -187,7 +187,10 @@ class AppLaunchTool(
             return ToolResult.Failure(
                 message = UserMessage(
                     key = MessageKey.ERROR_PERMISSION_DENIED,
-                    args = listOf(MessageArg.Text(effectiveTargetId))
+                    args = listOf(
+                        MessageArg.Text(effectiveTargetId),
+                        MessageArg.Text(AtomicCapability.APP_LAUNCH.name)
+                    )
                 ),
                 errorCode = "PERMISSION_DENIED",
                 isSecurityViolation = true

@@ -77,7 +77,7 @@ class ThreeTierHybridRouterTest {
     }
 
     @Test
-    fun ruleIntentResolverMatchesAllFiftySeedGoldenCasesAndSkipsComplexAndLayerGCases() = runTest {
+    fun ruleIntentResolverMatchesAllSeedGoldenCasesAndSkipsComplexAndLayerGCases() = runTest {
         val firewall = FakeSecurityFirewallPort()
         val resolver = RuleIntentResolver(
             rulePackLoader = rulePackLoader,
@@ -134,7 +134,7 @@ class ThreeTierHybridRouterTest {
             }
         }
 
-        assertEquals(50, totalTier1Cases)
+        assertEquals(81, totalTier1Cases)
 
         val layerGTags = listOf("ru", "el", "he", "hi", "th", "ja", "zh", "ko", "sw")
         for (tag in layerGTags) {

@@ -270,7 +270,7 @@ class RuleSealAntiRollbackGate2RedTeamTest {
             approved.copy(grantId = "grant_other"),
             approved.copy(triggerSpec = RuleTriggerSpec("ALWAYS")),
             approved.copy(staticActions = listOf(actions.single().copy(requiresBiometric = true))),
-            approved.copy(sealHmacHex = approved.sealHmacHex.dropLast(1) + "0"),
+            approved.copy(sealHmacHex = approved.sealHmacHex.dropLast(1) + (if (approved.sealHmacHex.endsWith("0")) "1" else "0")),
             approved.copy(sealHmacHex = rules.legacySealForTest(approved)),
             approved.copy(sealHmacHex = "")
         )

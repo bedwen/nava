@@ -53,6 +53,16 @@ object AutomationToolNames {
     const val CREATE_NOTIFICATION_WATCHER: String = "create_notification_watcher"
     const val MANAGE_NOTIFICATION_WATCHERS: String = "manage_notification_watchers"
 
+    // Personal memory
+    const val REMEMBER_FACT: String = "remember_fact"
+    const val RECALL_FACTS: String = "recall_facts"
+    const val FORGET_FACT: String = "forget_fact"
+
+    // Device controls
+    const val SET_FLASHLIGHT: String = "set_flashlight"
+    const val MEDIA_CONTROL: String = "media_control"
+    const val OPEN_SETTINGS_PANEL: String = "open_settings_panel"
+
     /** All canonical tool names in deterministic sorted order. */
     val ALL: Set<String> = linkedSetOf(
         CALENDAR_CREATE,
@@ -82,7 +92,13 @@ object AutomationToolNames {
         SUMMARIZE_NOTIFICATIONS,
         VAULT_DELETE,
         VAULT_READ,
-        VAULT_WRITE
+        VAULT_WRITE,
+        REMEMBER_FACT,
+        RECALL_FACTS,
+        FORGET_FACT,
+        SET_FLASHLIGHT,
+        MEDIA_CONTROL,
+        OPEN_SETTINGS_PANEL
     )
 
     /** Tools targeting Nava Secure Vault (always require biometric unlock and never run unattended). */
@@ -111,4 +127,5 @@ object AutomationOutboundActions {
     const val ACTION_SAF_WRITE: String = "SAF_WRITE"
     const val ACTION_CALENDAR_PROVIDER: String = "CALENDAR_PROVIDER"
     const val ACTION_APP_LAUNCH: String = "APP_LAUNCH"
+    const val ACTION_SETTINGS_PANEL: String = "SETTINGS_PANEL"
 }

@@ -28,6 +28,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
@@ -580,6 +583,14 @@ class LiteRtLlmEngine(
 
     private val inferenceMutex = Mutex()
 
+    private val _isLoadingWeights = MutableStateFlow(false)
+
+    /**
+     * True while native weights are being initialized from a cold (unloaded) state, so the UI
+     * can tell the user the model is warming up instead of showing a generic typing indicator.
+     */
+    val isLoadingWeights: StateFlow<Boolean> = _isLoadingWeights.asStateFlow()
+
     init {
         coordinator?.registerUnloader(modelSlot) {
             if (isModelLoaded()) {
@@ -612,6 +623,102 @@ class LiteRtLlmEngine(
             }
             coordinator?.markUnloaded(modelSlot)
         }
+    }
+
+    /**
+     * Loads native weights and pins the [systemPrefixId] master prefix ahead of the first turn
+     * (for example when the user focuses the command field), then arms the normal idle-unload
+     * timer exactly as a completed turn would. No user data is involved: only the static system
+     * prompt for [systemPrefixId] is prefilled.
+     *
+     * Refuses (returns false) when the model is not provisioned, when thermal/battery/RAM policy
+     * would unload immediately after a turn (effective idle timeout `0`), or when the LLM may not
+     * run at all, so prewarming never overrides PLAN.md Section 2.3 unload rules.
+     */
+    override suspend fun prewarm(systemPrefixId: String): Boolean {
+        if (!lifecycleManager.canRunLlm()) return false
+        if (lifecycleManager.effectiveIdleUnloadTimeoutSec() <= 0) return false
+        val precheckedPath = modelPathProvider()
+        if (precheckedPath.isNullOrBlank() || !File(precheckedPath).let { it.exists() && it.isFile }) {
+            return false
+        }
+        val systemPrompt = Gemma4PromptFormat.systemPromptForPrefixId(systemPrefixId)
+
+        coordinator?.onBeforeLoad(modelSlot)
+
+        return inferenceMutex.withLock {
+            if (!lifecycleManager.canRunLlm()) return@withLock false
+            val modelPath = modelPathProvider()
+            if (modelPath.isNullOrBlank() || !File(modelPath).let { it.exists() && it.isFile }) {
+                coordinator?.markUnloaded(modelSlot)
+                return@withLock false
+            }
+            try {
+                ensureLoadedLocked(modelPath, systemPrefixId, systemPrompt)
+                true
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Throwable) {
+                false
+            } finally {
+                withContext(NonCancellable) { armIdleUnloadAfterUse() }
+            }
+        }
+    }
+
+    /** Must be called while holding [inferenceMutex]. */
+    private suspend fun ensureLoadedLocked(
+        modelPath: String,
+        systemPrefixId: String,
+        systemPrompt: String
+    ) {
+        val maxContextTokens = when {
+            modelSlot == ModelSlot.FUNCTION_ROUTER ->
+                minOf(lifecycleManager.effectiveContextTokens(), 1024)
+            modelPath.contains("e2b", ignoreCase = true) ->
+                lifecycleManager.currentRamTier().e2bOptimalContextTokens
+            else ->
+                lifecycleManager.effectiveContextTokens()
+        }
+        val coldLoad = !runtimeAdapter.isLoaded()
+        if (coldLoad) _isLoadingWeights.value = true
+        try {
+            lifecycleManager.onEnsureLoaded(modelSlot) {
+                runtimeAdapter.ensureMasterPrefix(
+                    modelPath = modelPath,
+                    systemPrefixId = systemPrefixId,
+                    systemPrompt = systemPrompt,
+                    maxNumTokens = maxContextTokens
+                )
+                coordinator?.markLoaded(modelSlot)
+            }
+        } catch (t: Throwable) {
+            if (!runtimeAdapter.isLoaded()) {
+                coordinator?.markUnloaded(modelSlot)
+            }
+            throw t
+        } finally {
+            if (coldLoad) _isLoadingWeights.value = false
+        }
+    }
+
+    /** Must be called while holding [inferenceMutex] (the deferred unloader re-acquires it). */
+    private suspend fun armIdleUnloadAfterUse() {
+        lifecycleManager.onTurnCompleted(
+            slot = modelSlot,
+            immediateUnloader = {
+                runtimeAdapter.unload()
+                coordinator?.markUnloaded(modelSlot)
+            },
+            deferredIdleUnloader = { expectedGen ->
+                inferenceMutex.withLock {
+                    if (lifecycleManager.consumePendingIdleUnload(modelSlot, expectedGen)) {
+                        runtimeAdapter.unload()
+                        coordinator?.markUnloaded(modelSlot)
+                    }
+                }
+            }
+        )
     }
 
     private sealed interface TurnOutcome {
@@ -661,7 +768,8 @@ class LiteRtLlmEngine(
             )
         } else if (request.systemPrefixId == Gemma4PromptFormat.DEFAULT_STAGE1_CHAT_SYSTEM_PREFIX_ID) {
             Gemma4PromptFormat.formatChatUserTurn(
-                userUtterance = request.userUtterance
+                userUtterance = request.userUtterance,
+                userFacts = request.userFacts
             )
         } else if (request.systemPrefixId == FunctionGemmaPromptFormat.FUNCTION_GEMMA_SYSTEM_PREFIX_ID) {
             FunctionGemmaPromptFormat.formatTurnPayload(
@@ -676,7 +784,8 @@ class LiteRtLlmEngine(
                 languageHintTag = request.languageHintTag,
                 userUtterance = request.userUtterance,
                 conversationHistory = request.conversationHistory,
-                currentLocalDateTimeIso = request.currentLocalDateTimeIso
+                currentLocalDateTimeIso = request.currentLocalDateTimeIso,
+                userFacts = request.userFacts
             )
         }
 
@@ -722,31 +831,7 @@ class LiteRtLlmEngine(
                 suppressTokenIds = if (request.stage2BlindExtractionMode) stage2SuppressTokenIds else emptyList()
             )
 
-            val maxContextTokens = when {
-                modelSlot == ModelSlot.FUNCTION_ROUTER ->
-                    minOf(lifecycleManager.effectiveContextTokens(), 1024)
-                modelPath.contains("e2b", ignoreCase = true) ->
-                    lifecycleManager.currentRamTier().e2bOptimalContextTokens
-                else ->
-                    lifecycleManager.effectiveContextTokens()
-            }
-
-            try {
-                lifecycleManager.onEnsureLoaded(modelSlot) {
-                    runtimeAdapter.ensureMasterPrefix(
-                        modelPath = modelPath,
-                        systemPrefixId = request.systemPrefixId,
-                        systemPrompt = systemPrompt,
-                        maxNumTokens = maxContextTokens
-                    )
-                    coordinator?.markLoaded(modelSlot)
-                }
-            } catch (t: Throwable) {
-                if (!runtimeAdapter.isLoaded()) {
-                    coordinator?.markUnloaded(modelSlot)
-                }
-                throw t
-            }
+            ensureLoadedLocked(modelPath, request.systemPrefixId, systemPrompt)
 
             val outputBuilder = StringBuilder()
             var channelThoughtTokens = 0
@@ -792,23 +877,7 @@ class LiteRtLlmEngine(
                     thoughtAbortedReason = signal.message
                 }
             } finally {
-                withContext(NonCancellable) {
-                    lifecycleManager.onTurnCompleted(
-                        slot = modelSlot,
-                        immediateUnloader = {
-                            runtimeAdapter.unload()
-                            coordinator?.markUnloaded(modelSlot)
-                        },
-                        deferredIdleUnloader = { expectedGen ->
-                            inferenceMutex.withLock {
-                                if (lifecycleManager.consumePendingIdleUnload(modelSlot, expectedGen)) {
-                                    runtimeAdapter.unload()
-                                    coordinator?.markUnloaded(modelSlot)
-                                }
-                            }
-                        }
-                    )
-                }
+                withContext(NonCancellable) { armIdleUnloadAfterUse() }
             }
 
             val elapsedMs = (clockMs() - startMs).coerceAtLeast(0L)

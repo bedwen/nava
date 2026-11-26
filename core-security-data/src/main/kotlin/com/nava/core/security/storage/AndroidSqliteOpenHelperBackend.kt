@@ -51,6 +51,13 @@ class AndroidSqliteOpenHelperBackend(
                 db.execSQL(statement)
             }
         }
+        if (oldVersion < 4) {
+            for (statement in EncryptedTableSchema.createStatementsForTable(
+                EncryptedTableSchema.TABLE_PERSONAL_FACTS
+            )) {
+                db.execSQL(statement)
+            }
+        }
     }
 
     override fun allocateRowId(tableName: String): Long {

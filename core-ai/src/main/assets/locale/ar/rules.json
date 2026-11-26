@@ -128,6 +128,222 @@
       "slotMappings": {},
       "staticSlots": {},
       "priority": 110
+    },
+    {
+      "patternId": "ar_set_alarm_compact_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:من فضلك )?(?:(?:اضبط|ضبط|شغل|انشئ) )?(?:ال)?منبه(?:ا)? (?:علي )?(?:في |عند )?(?:الساعه )?(\\d{1,2}):(\\d{2})(?: (صباحا|مساء|ليلا))?(?: غدا)?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 112
+    },
+    {
+      "patternId": "ar_set_alarm_compact_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:من فضلك )?(?:(?:اضبط|ضبط|شغل|انشئ) )?(?:ال)?منبه(?:ا)? (?:علي )?(?:في |عند )?(?:الساعه )?(\\d{1,2})(?: (صباحا|مساء|ليلا))?(?: غدا)?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 104
+    },
+    {
+      "patternId": "ar_wake_me_hhmm",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:من فضلك )?ايقظني (?:غدا )?(?:في |عند )?(?:الساعه )?(\\d{1,2}):(\\d{2})(?: (صباحا|مساء|ليلا))?(?: غدا)?$",
+      "slotMappings": {
+        "hour": "1",
+        "minute": "2",
+        "period_keyword": "3"
+      },
+      "staticSlots": {},
+      "priority": 113
+    },
+    {
+      "patternId": "ar_wake_me_hour",
+      "toolName": "set_alarm",
+      "regexPattern": "^(?:من فضلك )?ايقظني (?:غدا )?(?:في |عند )?(?:الساعه )?(\\d{1,2})(?: (صباحا|مساء|ليلا))?(?: غدا)?$",
+      "slotMappings": {
+        "hour": "1",
+        "period_keyword": "2"
+      },
+      "staticSlots": {},
+      "priority": 103
+    },
+    {
+      "patternId": "ar_set_timer_compact",
+      "toolName": "set_timer",
+      "regexPattern": "^(?:من فضلك )?(?:(?:اضبط|شغل|ابدا) )?(?:ال)?مؤقت(?:ا)? (?:لمده )?(\\d{1,4}) (ثانيه|ثواني|ثوان|دقيقه|دقائق|ساعه|ساعات)$",
+      "slotMappings": {
+        "duration_value": "1",
+        "duration_unit": "2"
+      },
+      "staticSlots": {},
+      "priority": 108
+    },
+    {
+      "patternId": "ar_set_volume_flexible",
+      "toolName": "set_volume",
+      "regexPattern": "^(?:من فضلك )?(?:(?:اجعل|اضبط|ارفع|اخفض) )?(?:مستوي )?الصوت (?:الي |علي )?(\\d{1,3})%?$",
+      "slotMappings": {
+        "level": "1"
+      },
+      "staticSlots": {},
+      "priority": 105
+    },
+    {
+      "patternId": "ar_set_dnd_silence",
+      "toolName": "set_dnd",
+      "regexPattern": "^(?:من فضلك )?(?:اجعل الهاتف صامتا|ضع الهاتف علي (?:الوضع )?الصامت|شغل الوضع الصامت)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 105
+    },
+    {
+      "patternId": "ar_schedule_reminder_in_min_first",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:من فضلك )?بعد (\\d{1,4}) (?:دقائق|دقيقه) ذكرني (?:ب)?(.{1,80})$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 118
+    },
+    {
+      "patternId": "ar_remember_fact_0",
+      "toolName": "remember_fact",
+      "regexPattern": "^تذكر(?: ان)? (.{3,200}?)$",
+      "slotMappings": {
+        "fact": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "ar_recall_facts_0",
+      "toolName": "recall_facts",
+      "regexPattern": "^ماذا (?:تعرف|تتذكر) عني ?[?؟]?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "ar_forget_fact_0",
+      "toolName": "forget_fact",
+      "regexPattern": "^انس (.{2,80}?)$",
+      "slotMappings": {
+        "query": "1"
+      },
+      "staticSlots": {},
+      "priority": 116
+    },
+    {
+      "patternId": "ar_flashlight_on_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:من فضلك )?(?:شغل|افتح) (?:ال)?مصباح(?: اليدوي)?$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "true"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_flashlight_off_0",
+      "toolName": "set_flashlight",
+      "regexPattern": "^(?:من فضلك )?(?:اطفئ|اغلق) (?:ال)?مصباح(?: اليدوي)?$",
+      "slotMappings": {},
+      "staticSlots": {
+        "enabled": "false"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_media_pause_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:اوقف|ايقاف) (?:ال)?موسيقي$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "pause"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_media_play_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:شغل|استانف) (?:ال)?موسيقي$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "play"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_media_next_0",
+      "toolName": "media_control",
+      "regexPattern": "^(?:الاغنيه التاليه|تخط الاغنيه)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "next"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_media_previous_0",
+      "toolName": "media_control",
+      "regexPattern": "^الاغنيه السابقه$",
+      "slotMappings": {},
+      "staticSlots": {
+        "command": "previous"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_settings_panel_wifi_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^افتح اعدادات (?:ال)?(?:واي فاي|wifi)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "wifi"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_settings_panel_bluetooth_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^افتح اعدادات (?:ال)?(?:بلوتوث|bluetooth)$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "bluetooth"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_settings_panel_internet_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^افتح اعدادات (?:ال)?انترنت$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "internet"
+      },
+      "priority": 116
+    },
+    {
+      "patternId": "ar_settings_panel_volume_0",
+      "toolName": "open_settings_panel",
+      "regexPattern": "^افتح اعدادات (?:ال)?صوت$",
+      "slotMappings": {},
+      "staticSlots": {
+        "panel": "volume"
+      },
+      "priority": 116
     }
   ],
   "conversationalPatterns": [
@@ -155,5 +371,13 @@
       "replyText": "على الرحب والسعة. أخبرني إذا احتجت إلى أي مساعدة أخرى.",
       "priority": 100
     }
-  ]
+  ],
+  "toolHints": {
+    "remember_fact": ["تذكر"],
+    "recall_facts": ["تعرف", "تتذكر", "عني"],
+    "forget_fact": ["انس"],
+    "set_flashlight": ["مصباح"],
+    "media_control": ["موسيقي", "الاغنيه"],
+    "open_settings_panel": ["اعدادات", "بلوتوث", "انترنت"]
+  }
 }

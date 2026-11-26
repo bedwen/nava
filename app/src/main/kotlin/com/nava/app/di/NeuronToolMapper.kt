@@ -59,7 +59,17 @@ object NeuronToolMapper {
         AutomationToolNames.SAF_DELETE to NeuronNodeId.FILES,
 
         // Routines
-        AutomationToolNames.PROPOSE_ROUTINE to NeuronNodeId.ROUTINES
+        AutomationToolNames.PROPOSE_ROUTINE to NeuronNodeId.ROUTINES,
+
+        // Personal memory
+        AutomationToolNames.REMEMBER_FACT to NeuronNodeId.NOTES,
+        AutomationToolNames.RECALL_FACTS to NeuronNodeId.NOTES,
+        AutomationToolNames.FORGET_FACT to NeuronNodeId.NOTES,
+
+        // Device controls
+        AutomationToolNames.SET_FLASHLIGHT to NeuronNodeId.AUDIO_DND,
+        AutomationToolNames.MEDIA_CONTROL to NeuronNodeId.AUDIO_DND,
+        AutomationToolNames.OPEN_SETTINGS_PANEL to NeuronNodeId.AUDIO_DND
     )
 
     private val targetToNeuron: Map<String, NeuronNodeId> = linkedMapOf(
@@ -75,7 +85,11 @@ object NeuronToolMapper {
         ToolTargetIds.APP_LAUNCH to NeuronNodeId.AUDIO_DND,
         ToolTargetIds.SAF to NeuronNodeId.FILES,
         ToolTargetIds.ROUTINES to NeuronNodeId.ROUTINES,
-        ToolTargetIds.BACKGROUND_TASKS to NeuronNodeId.ROUTINES
+        ToolTargetIds.BACKGROUND_TASKS to NeuronNodeId.ROUTINES,
+        ToolTargetIds.MEMORY to NeuronNodeId.NOTES,
+        ToolTargetIds.FLASHLIGHT to NeuronNodeId.AUDIO_DND,
+        ToolTargetIds.MEDIA to NeuronNodeId.AUDIO_DND,
+        ToolTargetIds.SETTINGS_PANEL to NeuronNodeId.AUDIO_DND
     )
 
     private val neuronToPrimaryTarget: Map<NeuronNodeId, String> = linkedMapOf(

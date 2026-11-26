@@ -111,6 +111,54 @@
       "expectedTier": "NO_MATCH_TIER_1",
       "expectedTool": null,
       "expectedSlots": {}
+    },
+    {
+      "id": "fr_alarm_compact_01",
+      "utterance": "alarme 7h30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "7",
+        "minute": "30"
+      }
+    },
+    {
+      "id": "fr_wake_me_01",
+      "utterance": "Réveille-moi à 6h45",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_alarm",
+      "expectedSlots": {
+        "hour": "6",
+        "minute": "45"
+      }
+    },
+    {
+      "id": "fr_timer_compact_01",
+      "utterance": "minuteur 5 minutes",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_timer",
+      "expectedSlots": {
+        "duration_value": "5",
+        "duration_unit": "minutes"
+      }
+    },
+    {
+      "id": "fr_volume_flexible_01",
+      "utterance": "Baisse le volume à 30",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_volume",
+      "expectedSlots": {
+        "level": "30"
+      }
+    },
+    {
+      "id": "fr_dnd_silence_01",
+      "utterance": "Mets le téléphone en silencieux",
+      "expectedTier": "TIER_1_RULE",
+      "expectedTool": "set_dnd",
+      "expectedSlots": {
+        "enabled": "true"
+      }
     }
   ]
 }

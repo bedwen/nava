@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -466,7 +467,24 @@ fun NavaHubScreen(
                             val isEntryError = entry.isError ||
                                 (entry.messageKey?.name?.startsWith("ERROR_") == true)
                             val isPermissionDenied = entry.messageKey == com.nava.domain.ui.MessageKey.ERROR_PERMISSION_DENIED
-                            LocalActionResultCard(
+                            val deniedTarget = entry.deniedTargetId
+                            val deniedCapability = entry.deniedCapability
+                            if (isPermissionDenied && deniedTarget != null && deniedCapability != null) {
+                                PermissionGrantCard(
+                                    targetId = deniedTarget,
+                                    capability = deniedCapability,
+                                    grantOffered = entry.permissionGrantOffered && !state.isProcessing,
+                                    bidiFormatter = bidiFormatter,
+                                    activeLocale = activeLocale,
+                                    onGrant = { level -> viewModel.grantPermissionAndRetry(entry.id, level) },
+                                    onOpenSettings = {
+                                        onOpenProfileForTarget(
+                                            deniedTarget,
+                                            entry.deniedNeuron ?: NeuronNodeId.CLOCK
+                                        )
+                                    }
+                                )
+                            } else LocalActionResultCard(
                                 kind = cardKind,
                                 title = entry.title,
                                 body = entry.body,
@@ -492,7 +510,7 @@ fun NavaHubScreen(
                                 }
                             )
                         } else if (state.isProcessing && entry.id == lastHistoryItem?.id) {
-                            NavaTypingIndicatorCard()
+                            NavaTypingIndicatorCard(isModelWarmingUp = state.isModelWarmingUp)
                         }
                     }
                 }
@@ -593,6 +611,12 @@ fun NavaHubScreen(
             colors = colors,
             bidiFormatter = bidiFormatter,
             commandFocusRequester = commandFocusRequester,
+            inputHint = if (state.workMode == HubWorkMode.CHAT) {
+                stringResource(R.string.hub_input_hint_chat)
+            } else {
+                stringResource(R.string.hub_input_hint_work)
+            },
+            onCommandFieldFocused = { viewModel.onCommandFieldFocused() },
             onQueryInputChanged = { viewModel.onQueryInputChanged(it) },
             onSubmitQuery = {
                 clearedStatusSignature = null
@@ -831,6 +855,8 @@ private fun HubCommandDock(
     colors: NavaExtendedColors,
     bidiFormatter: BidiTextFormatter,
     commandFocusRequester: FocusRequester,
+    inputHint: String,
+    onCommandFieldFocused: () -> Unit,
     onQueryInputChanged: (String) -> Unit,
     onSubmitQuery: () -> Unit,
     onChipClicked: (String) -> Unit,
@@ -877,6 +903,9 @@ private fun HubCommandDock(
                     modifier = Modifier
                         .weight(1f)
                         .focusRequester(commandFocusRequester)
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) onCommandFieldFocused()
+                        }
                         .padding(vertical = 8.dp),
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.inkPrimary),
@@ -891,6 +920,15 @@ private fun HubCommandDock(
                     ),
                     decorationBox = { innerTextField ->
                         Box(contentAlignment = Alignment.CenterStart) {
+                            if (queryInput.isEmpty()) {
+                                Text(
+                                    text = inputHint,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = colors.inkMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             innerTextField()
                         }
                     }
@@ -934,7 +972,7 @@ private fun HubCommandDock(
 }
 
 @Composable
-private fun NavaTypingIndicatorCard() {
+private fun NavaTypingIndicatorCard(isModelWarmingUp: Boolean) {
     val colors = NavaThemeExtras.colors
     val transition = rememberInfiniteTransition(label = "nava_typing_dots")
     val dotAlphas = List(3) { index ->
@@ -976,6 +1014,14 @@ private fun NavaTypingIndicatorCard() {
                             .size(6.dp)
                             .alpha(alphaState.value)
                             .background(colors.trustNavyTint, CircleShape)
+                    )
+                }
+                if (isModelWarmingUp) {
+                    Text(
+                        text = stringResource(R.string.hub_model_warming_up),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(start = 6.dp)
                     )
                 }
             }

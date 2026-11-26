@@ -518,7 +518,8 @@ class AppContainer internal constructor(
             securityFirewall = securityFirewall,
             rulePackLoader = localeRulePackLoader,
             diagnosticsSink = llmDiagnosticsSink,
-            embeddingPort = embeddingPort
+            embeddingPort = embeddingPort,
+            personalMemory = personalFactDao
         )
     }
 
@@ -541,6 +542,26 @@ class AppContainer internal constructor(
 
     val audioDndGateway: AudioDndPlatformGateway by lazy {
         audioDndGatewayOverride ?: AndroidAudioDndPlatformGateway(requireContext())
+    }
+
+    val deviceControlGateway: com.nava.feature.automations.common.DeviceControlPlatformGateway by lazy {
+        val ctx = appContext
+        if (ctx != null) {
+            com.nava.feature.automations.common.AndroidDeviceControlPlatformGateway(ctx)
+        } else {
+            object : com.nava.feature.automations.common.DeviceControlPlatformGateway {
+                private val unavailable =
+                    com.nava.feature.automations.common.PlatformDispatchResult.Unavailable("No Android context")
+                override fun setFlashlight(enabled: Boolean) = unavailable
+                override fun sendMediaCommand(command: com.nava.feature.automations.common.MediaCommand) = unavailable
+                override fun openSettingsPanel(panel: com.nava.feature.automations.common.SettingsPanelKind) = unavailable
+            }
+        }
+    }
+
+    /** Encrypted store of facts the user asked Nava to remember. */
+    val personalFactDao: com.nava.core.security.dao.PersonalFactDao by lazy {
+        com.nava.core.security.dao.PersonalFactDao(encryptedSqliteStore)
     }
 
     val calendarGateway: CalendarPlatformGateway by lazy {
@@ -751,6 +772,18 @@ class AppContainer internal constructor(
                 add(appLaunchTool)                       // 1: launch_app
                 addAll(safDirectoryTools)                // 3: saf_read, saf_write, saf_delete
                 add(proposeRoutineTool)                  // 1: propose_routine
+                add(com.nava.feature.automations.memory.RememberFactTool(personalFactDao, auditLogDao))
+                add(com.nava.feature.automations.memory.RecallFactsTool(personalFactDao, auditLogDao))
+                add(com.nava.feature.automations.memory.ForgetFactTool(personalFactDao, auditLogDao))
+                add(com.nava.feature.automations.device.FlashlightTool(deviceControlGateway, auditLogDao))
+                add(com.nava.feature.automations.device.MediaControlTool(deviceControlGateway, auditLogDao))
+                add(
+                    com.nava.feature.automations.device.SettingsPanelTool(
+                        deviceControlGateway,
+                        securityFirewall,
+                        auditLogDao
+                    )
+                )
             }
         )
     }

@@ -118,7 +118,7 @@ class CryptoEnginesTest {
         assertTrue(hmacEngine.verifyHmacHex(key, data, tagHex))
         assertTrue(hmacEngine.verifyHmacHex(key, data, tagHex.uppercase()))
         assertFalse(hmacEngine.verifyHmacHex(key, "tampered".toByteArray(Charsets.UTF_8), tagHex))
-        assertFalse(hmacEngine.verifyHmacHex(key, data, tagHex.dropLast(2) + "00"))
+        assertFalse(hmacEngine.verifyHmacHex(key, data, tagHex.dropLast(2) + (if (tagHex.takeLast(2) == "00") "ff" else "00")))
         assertFalse(hmacEngine.verifyHmacHex(key, data, "short"))
         assertFalse(hmacEngine.verifyHmacHex(key, data, "z".repeat(64)))
     }

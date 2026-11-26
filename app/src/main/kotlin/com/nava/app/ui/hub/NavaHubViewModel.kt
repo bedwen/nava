@@ -50,6 +50,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,6 +89,10 @@ data class HubActionHistoryItem(
     val isError: Boolean = false,
     val deniedTargetId: String? = null,
     val deniedNeuron: NeuronNodeId? = null,
+    /** Capability the firewall denied, parsed from its structured message args (never model text). */
+    val deniedCapability: com.nava.domain.security.AtomicCapability? = null,
+    /** True on the newest denial for a target/capability pair whose one-tap grant is still open. */
+    val permissionGrantOffered: Boolean = false,
     val bodyProvenance: DataProvenance = DataProvenance.SYSTEM
 )
 
@@ -143,6 +148,8 @@ data class NavaHubUiState(
     val canvasState: NeuralCanvasState = NeuralCanvasState(),
     val queryInput: String = "",
     val isProcessing: Boolean = false,
+    /** True while Gemma weights load from cold, so the typing card can say the model is warming up. */
+    val isModelWarmingUp: Boolean = false,
     val lastResolutionTier: ResolutionTier? = null,
     val statusTitle: String? = null,
     val statusMessage: String? = null,
@@ -231,6 +238,11 @@ class NavaHubViewModel(
     }
 
     private fun observeContainerStreams() {
+        vmScope.launch {
+            container.liteRtLlmEngine.isLoadingWeights.collect { loading ->
+                _uiState.update { it.copy(isModelWarmingUp = loading) }
+            }
+        }
         vmScope.launch {
             container.pendingConfirmationStore.activeConfirmationFlow.collect { activeItem ->
                 _uiState.update { it.copy(activeConfirmation = activeItem) }
@@ -362,6 +374,32 @@ class NavaHubViewModel(
             catalog = container.supportedLanguageCatalog
         )
         _uiState.update { it.copy(qualitySuggestion = suggestion) }
+    }
+
+    private var prewarmJob: Job? = null
+
+    /**
+     * Starts loading Gemma weights when the user focuses the command field so the cold engine
+     * init overlaps with typing. The engine refuses when thermal/battery/RAM policy forbids
+     * keeping the model resident, and the normal idle-unload timer still applies afterwards.
+     */
+    fun onCommandFieldFocused() {
+        if (prewarmJob?.isActive == true) return
+        if (container.liteRtRuntimeAdapter.isLoaded()) return
+        val prefixId = if (_uiState.value.workMode == HubWorkMode.CHAT) {
+            com.nava.core.ai.prompt.Gemma4PromptFormat.DEFAULT_STAGE1_CHAT_SYSTEM_PREFIX_ID
+        } else {
+            com.nava.core.ai.prompt.Gemma4PromptFormat.DEFAULT_STAGE1_SYSTEM_PREFIX_ID
+        }
+        prewarmJob = vmScope.launch {
+            try {
+                container.llmEngine.prewarm(prefixId)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Throwable) {
+                // Prewarming is best-effort; the first real turn loads the model as before.
+            }
+        }
     }
 
     fun onQueryInputChanged(newText: String) {
@@ -807,6 +845,9 @@ class NavaHubViewModel(
                     deniedTargetId = failedTargetId,
                     deniedNeuron = failedNeuron
                 )
+                if (lastResult.message.key == MessageKey.ERROR_PERMISSION_DENIED) {
+                    markPermissionDenial(requestId, lastResult.message)
+                }
             }
 
             is ToolResult.Success -> {
@@ -917,6 +958,15 @@ class NavaHubViewModel(
      * `liveChatConversation` KV-cache, updating the active [chatHistory] card incrementally
      * as tokens arrive (Edge Gallery streaming UX) with zero tool declarations injected.
      */
+    /** Bounded remembered facts for the chat prompt; empty when the store is locked or failing. */
+    private suspend fun loadUserFactsForPrompt(): List<String> = try {
+        com.nava.domain.memory.PersonalFactContext.select(container.personalFactDao.listFacts())
+    } catch (ce: CancellationException) {
+        throw ce
+    } catch (_: Exception) {
+        emptyList()
+    }
+
     private suspend fun streamDirectChatReply(
         reqId: String,
         trimmedUtterance: String,
@@ -937,7 +987,8 @@ class NavaHubViewModel(
             maxThoughtTokens = 0,
             maxOutputTokens = 384,
             stage2BlindExtractionMode = false,
-            conversationHistory = sessionHistory
+            conversationHistory = sessionHistory,
+            userFacts = loadUserFactsForPrompt()
         )
 
         val accumulated = StringBuilder()
@@ -1743,6 +1794,14 @@ class NavaHubViewModel(
             AutomationToolNames.SCHEDULE_REMINDER,
             AutomationToolNames.CANCEL_REMINDER -> ToolTargetIds.REMINDERS
 
+            AutomationToolNames.REMEMBER_FACT,
+            AutomationToolNames.RECALL_FACTS,
+            AutomationToolNames.FORGET_FACT -> ToolTargetIds.MEMORY
+
+            AutomationToolNames.SET_FLASHLIGHT -> ToolTargetIds.FLASHLIGHT
+            AutomationToolNames.MEDIA_CONTROL -> ToolTargetIds.MEDIA
+            AutomationToolNames.OPEN_SETTINGS_PANEL -> ToolTargetIds.SETTINGS_PANEL
+
             AutomationToolNames.LAUNCH_APP -> {
                 val candidates = listOf("package_name", "app_name", "target")
                     .mapNotNull { rawArgs[it]?.trim()?.takeIf { v -> v.isNotEmpty() } }
@@ -1886,6 +1945,105 @@ class NavaHubViewModel(
 
     fun onSystemPermissionRequestHandled() {
         _uiState.update { it.copy(pendingSystemPermissionRequest = null) }
+    }
+
+    /**
+     * Records which target/capability the firewall denied for [requestId] so the card can offer
+     * a one-tap grant, and collapses repeats: an older entry for the same command and denial is
+     * dropped, and older denials of the same pair stop offering a grant.
+     */
+    private fun markPermissionDenial(requestId: String, message: UserMessage) {
+        val targetId = (message.args.getOrNull(0) as? com.nava.domain.ui.MessageArg.Text)?.value
+            ?.takeIf { it.isNotBlank() } ?: return
+        val capabilityName = (message.args.getOrNull(1) as? com.nava.domain.ui.MessageArg.Text)?.value
+        val capability = com.nava.domain.security.AtomicCapability.entries
+            .firstOrNull { it.name == capabilityName } ?: return
+        val grantable = isOneTapGrantable(targetId, capability)
+        _uiState.update { state ->
+            val current = state.actionHistory.firstOrNull { it.id == requestId } ?: return@update state
+            val pruned = state.actionHistory.filterNot { entry ->
+                entry.id != requestId &&
+                    entry.deniedCapability == capability &&
+                    entry.deniedTargetId == targetId &&
+                    entry.userQuery.equals(current.userQuery, ignoreCase = true)
+            }.map { entry ->
+                when {
+                    entry.id == requestId -> entry.copy(
+                        deniedTargetId = targetId,
+                        deniedCapability = capability,
+                        permissionGrantOffered = grantable
+                    )
+                    entry.deniedCapability == capability && entry.deniedTargetId == targetId ->
+                        entry.copy(permissionGrantOffered = false)
+                    else -> entry
+                }
+            }
+            state.copy(actionHistory = pruned)
+        }
+    }
+
+    /**
+     * One-tap grants cover everyday capabilities only. The vault, SAF folders and notification
+     * reading keep their dedicated setup flows (biometric, folder picker, listener access).
+     */
+    private fun isOneTapGrantable(
+        targetId: String,
+        capability: com.nava.domain.security.AtomicCapability
+    ): Boolean {
+        if (targetId == "unknown_target") return false
+        if (targetId.equals(ToolTargetIds.VAULT, ignoreCase = true)) return false
+        if (targetId.startsWith("saf:") || targetId == ToolTargetIds.SAF) return false
+        return capability != com.nava.domain.security.AtomicCapability.NOTIFICATION_READ
+    }
+
+    /**
+     * Applies the user's one-tap choice from a denial card to that target only, then re-submits
+     * the user's own original command (fresh USER_UTTERANCE resolution and capability token).
+     * Only [ConfirmationLevel.PROMPT_CARD] or [ConfirmationLevel.AUTO] are accepted, and AUTO
+     * is refused wherever the level is structurally invalid (e.g. MODIFY_DELETE_SEND).
+     */
+    fun grantPermissionAndRetry(entryId: String, level: com.nava.domain.security.ConfirmationLevel) {
+        val entry = _uiState.value.actionHistory.firstOrNull { it.id == entryId } ?: return
+        if (!entry.permissionGrantOffered) return
+        val targetId = entry.deniedTargetId ?: return
+        val capability = entry.deniedCapability ?: return
+        if (level != com.nava.domain.security.ConfirmationLevel.PROMPT_CARD &&
+            level != com.nava.domain.security.ConfirmationLevel.AUTO
+        ) {
+            return
+        }
+        if (!level.isValidFor(capability) || !isOneTapGrantable(targetId, capability)) return
+        if (_uiState.value.isProcessing) return
+
+        _uiState.update { state ->
+            state.copy(
+                actionHistory = state.actionHistory.filterNot { it.id == entryId }
+            )
+        }
+        vmScope.launch {
+            val granted = try {
+                container.manageProfilesUseCase.setCapabilityForTarget(
+                    targetId = targetId,
+                    capability = capability,
+                    level = level,
+                    nowEpochMs = clockMs()
+                )
+                true
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                false
+            }
+            refreshPermittedNeurons()
+            if (granted) {
+                submitQuery(entry.userQuery)
+            } else {
+                applyUserMessageBanner(
+                    message = UserMessage(MessageKey.ERROR_SECURITY_VIOLATION),
+                    isError = true
+                )
+            }
+        }
     }
 
     private fun applyUserMessageBanner(

@@ -115,7 +115,7 @@ class LocaleAndMessageRenderingTest {
             )
         )
 
-        assertEquals(62, MessageKey.entries.size)
+        assertEquals(71, MessageKey.entries.size)
 
         for (key in MessageKey.entries) {
             val resourceName = MessageTemplateProvider.canonicalResourceName(key)
