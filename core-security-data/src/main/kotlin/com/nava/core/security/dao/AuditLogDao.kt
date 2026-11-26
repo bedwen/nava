@@ -1,5 +1,6 @@
 package com.nava.core.security.dao
 
+import com.nava.core.security.crypto.KeyUnavailability
 import com.nava.core.security.crypto.SecureMemory
 import com.nava.core.security.storage.DecryptedRow
 import com.nava.core.security.storage.EncryptedSqliteStore
@@ -8,6 +9,9 @@ import com.nava.core.security.storage.StructuredPayloadCodec
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.AuditLogPort
 import com.nava.domain.security.DataProvenance
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Encrypted persistent DAO implementing [AuditLogPort] over [EncryptedSqliteStore]
@@ -17,7 +21,54 @@ class AuditLogDao(
     private val store: EncryptedSqliteStore
 ) : AuditLogPort {
 
+    /**
+     * Entries that could not be encrypted because the `nava_db_master_key` was transiently
+     * unavailable (device locked). They are flushed, in order, on the next successful write so
+     * background firewall decisions are never lost and never abort the action being audited.
+     * Bounded to [MAX_PENDING_ENTRIES]; the oldest entries are dropped first and counted.
+     */
+    private val pendingEntries = ArrayDeque<AuditLogEntry>()
+    private val pendingMutex = Mutex()
+    private var droppedPendingEntries: Long = 0L
+
+    /** Number of audit entries buffered while the master key was unavailable. */
+    suspend fun pendingBufferedCount(): Int = pendingMutex.withLock { pendingEntries.size }
+
+    /** Number of buffered entries dropped because the bounded buffer overflowed. */
+    suspend fun droppedBufferedCount(): Long = pendingMutex.withLock { droppedPendingEntries }
+
     override suspend fun record(entry: AuditLogEntry) {
+        pendingMutex.withLock {
+            try {
+                while (pendingEntries.isNotEmpty()) {
+                    try {
+                        persist(pendingEntries.first())
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        if (KeyUnavailability.isTransient(e)) throw e
+                        // A permanently unpersistable buffered entry must not wedge the log.
+                        droppedPendingEntries++
+                    }
+                    pendingEntries.removeFirst()
+                }
+                persist(entry)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                if (!KeyUnavailability.isTransient(e)) {
+                    throw e
+                }
+                if (pendingEntries.size >= MAX_PENDING_ENTRIES) {
+                    pendingEntries.removeFirst()
+                    droppedPendingEntries++
+                }
+                pendingEntries.addLast(entry)
+            }
+        }
+    }
+
+    private suspend fun persist(entry: AuditLogEntry) {
         val lookupHmac = store.computeStructuredBlindIndex(DOMAIN_AUDIT_TARGET, entry.targetId)
         val encoded = encodeEntry(entry)
         SecureMemory.withZeroizedBytes(encoded) { payload ->
@@ -114,6 +165,7 @@ class AuditLogDao(
     companion object {
         private const val DOMAIN_AUDIT_TARGET: String = "audit_target"
         private const val AUDIT_SCHEMA_VERSION: Int = 1
+        private const val MAX_PENDING_ENTRIES: Int = 256
         private val NEWEST_FIRST_COMPARATOR: Comparator<AuditLogEntry> =
             compareByDescending<AuditLogEntry> { it.timestampEpochMs }.thenByDescending { it.id }
     }

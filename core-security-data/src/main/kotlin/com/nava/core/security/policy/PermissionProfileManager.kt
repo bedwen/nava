@@ -1,5 +1,6 @@
 package com.nava.core.security.policy
 
+import com.nava.core.security.crypto.KeyUnavailability
 import com.nava.core.security.crypto.SecureMemory
 import com.nava.core.security.storage.DecryptedRow
 import com.nava.core.security.storage.EncryptedSqliteStore
@@ -10,6 +11,9 @@ import com.nava.domain.security.ConfirmationLevel
 import com.nava.domain.security.PermissionEvaluatorPort
 import com.nava.domain.security.PermissionProfile
 import com.nava.domain.security.PermissionProfilePreset
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -29,6 +33,20 @@ class PermissionProfileManager(
 
     private val policyMutex = Mutex()
 
+    /**
+     * Last profile successfully resolved from [store] per target, used ONLY when the
+     * `nava_db_master_key` is transiently unavailable (device locked,
+     * `setUnlockedDeviceRequired(true)`). Without it, every background caller (notification
+     * listener, routines) silently resolved to Default-Deny while the screen was locked.
+     *
+     * Every mutation goes through this manager, so entries can never be stale relative to the
+     * database: each successful write bumps [resolutionCacheVersion] and clears the cache.
+     * A cache miss while locked still fails closed (the original exception propagates).
+     */
+    private val lastKnownProfileByTarget = ConcurrentHashMap<String, PermissionProfile>()
+    private val resolutionCacheVersion = AtomicLong(0L)
+    private val warmedAtVersion = AtomicLong(-1L)
+
     private val builtInPresets: Map<String, PermissionProfile> = linkedMapOf(
         PermissionProfile.DEFAULT_DENY_PROFILE_ID to PermissionProfile.defaultDeny(),
         PermissionProfile.NOTIFICATION_SUMMARY_PROFILE_ID to PermissionProfile.notificationSummaryOnly(),
@@ -41,6 +59,55 @@ class PermissionProfileManager(
         if (targetId.isBlank() || NULL_CHAR in targetId) {
             return PermissionProfile.defaultDeny()
         }
+        val versionAtStart = resolutionCacheVersion.get()
+        val resolved = try {
+            resolveProfileFromStore(targetId)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            if (KeyUnavailability.isTransient(e)) {
+                lastKnownProfileByTarget[targetId]?.let { return it }
+            }
+            throw e
+        }
+        if (resolutionCacheVersion.get() == versionAtStart) {
+            lastKnownProfileByTarget[targetId] = resolved
+            warmResolutionCacheIfCold(versionAtStart)
+        }
+        return resolved
+    }
+
+    /**
+     * After the first successful (unlocked) resolution, snapshots every explicit target binding so
+     * targets first seen while the device is locked are still evaluated against the user's choice.
+     */
+    private suspend fun warmResolutionCacheIfCold(version: Long) {
+        if (warmedAtVersion.get() == version) return
+        val snapshot = HashMap<String, PermissionProfile>()
+        try {
+            for ((profileId, targets) in loadTargetsGroupedByProfile()) {
+                val profile = findProfileById(profileId) ?: PermissionProfile.defaultDeny()
+                for (target in targets) {
+                    snapshot[target] = profile
+                }
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            return
+        }
+        if (resolutionCacheVersion.get() == version) {
+            lastKnownProfileByTarget.putAll(snapshot)
+            warmedAtVersion.set(version)
+        }
+    }
+
+    private fun invalidateResolutionCache() {
+        resolutionCacheVersion.incrementAndGet()
+        lastKnownProfileByTarget.clear()
+    }
+
+    private suspend fun resolveProfileFromStore(targetId: String): PermissionProfile {
         val bindingHmac = store.computeBlindIndex(DOMAIN_TARGET, targetId)
         val bindingRow = store.findDecryptedByBlindIndex(
             tableName = EncryptedTableSchema.TABLE_PERMISSION_TARGET_BINDINGS,
@@ -118,6 +185,7 @@ class PermissionProfileManager(
                     schemaVersion = PROFILE_SCHEMA_VERSION
                 )
             }
+            invalidateResolutionCache()
         }
     }
 
@@ -149,6 +217,7 @@ class PermissionProfileManager(
                     schemaVersion = BINDING_SCHEMA_VERSION
                 )
             }
+            invalidateResolutionCache()
         }
     }
 
@@ -165,6 +234,8 @@ class PermissionProfileManager(
                 tableName = EncryptedTableSchema.TABLE_PERMISSION_PROFILES,
                 lookupHmac = profileHmac
             )
+            // Invalidate immediately: a cached binding must never outlive its deleted profile.
+            invalidateResolutionCache()
 
             val bindingRows = store.listAllDecrypted(EncryptedTableSchema.TABLE_PERMISSION_TARGET_BINDINGS)
             val affectedRowIds = try {
@@ -181,11 +252,15 @@ class PermissionProfileManager(
                     row.zeroize()
                 }
             }
-            for (rowId in affectedRowIds) {
-                store.deleteByRowId(
-                    tableName = EncryptedTableSchema.TABLE_PERMISSION_TARGET_BINDINGS,
-                    rowId = rowId
-                )
+            try {
+                for (rowId in affectedRowIds) {
+                    store.deleteByRowId(
+                        tableName = EncryptedTableSchema.TABLE_PERMISSION_TARGET_BINDINGS,
+                        rowId = rowId
+                    )
+                }
+            } finally {
+                invalidateResolutionCache()
             }
         }
     }

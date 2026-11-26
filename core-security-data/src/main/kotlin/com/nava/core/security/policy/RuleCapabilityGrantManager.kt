@@ -2,6 +2,7 @@ package com.nava.core.security.policy
 
 import com.nava.core.security.crypto.CryptoKeyProvider
 import com.nava.core.security.crypto.HmacSha256Engine
+import com.nava.core.security.crypto.KeyUnavailability
 import com.nava.core.security.crypto.SecureMemory
 import com.nava.core.security.storage.DecryptedRow
 import com.nava.core.security.storage.EncryptedSqliteStore
@@ -14,7 +15,10 @@ import com.nava.domain.security.RuleCapabilityGrant
 import com.nava.domain.security.RuleGrantPort
 import com.nava.domain.security.RuleTriggerSpec
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -31,6 +35,15 @@ class RuleCapabilityGrantManager(
 
     private val globalRulesPaused = AtomicBoolean(false)
     private val ruleStateMutex = Mutex()
+
+    /**
+     * Exact copy of each grant last written or read through this manager, served ONLY when the
+     * `nava_db_master_key` is transiently unavailable (device locked). Background routines fire
+     * mostly while the screen is off, and previously failed on every locked-device decrypt.
+     * The HMAC seal is still verified on every execution; a cache miss fails closed.
+     */
+    private val lastKnownGrantByRuleId = ConcurrentHashMap<String, RuleCapabilityGrant>()
+    private val grantWriteVersion = AtomicLong(0L)
 
     /** Globally pauses or resumes all background automation rule execution. */
     fun setGlobalRulesPaused(paused: Boolean) {
@@ -125,7 +138,26 @@ class RuleCapabilityGrantManager(
 
     override suspend fun findRule(ruleId: String): RuleCapabilityGrant? {
         if (ruleId.isBlank() || NULL_CHAR in ruleId) return null
-        return findRuleUnlocked(ruleId)
+        val versionAtStart = grantWriteVersion.get()
+        val found = try {
+            findRuleUnlocked(ruleId)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            if (KeyUnavailability.isTransient(e)) {
+                lastKnownGrantByRuleId[ruleId]?.let { return it }
+            }
+            throw e
+        }
+        // Never let a read that raced with a write (e.g. revoke) overwrite the newer cached grant.
+        if (grantWriteVersion.get() == versionAtStart) {
+            if (found != null) {
+                lastKnownGrantByRuleId[ruleId] = found
+            } else {
+                lastKnownGrantByRuleId.remove(ruleId)
+            }
+        }
+        return found
     }
 
     override suspend fun listRules(): List<RuleCapabilityGrant> {
@@ -191,6 +223,8 @@ class RuleCapabilityGrantManager(
                 schemaVersion = RULE_SCHEMA_VERSION
             )
         }
+        grantWriteVersion.incrementAndGet()
+        lastKnownGrantByRuleId[grant.ruleId] = grant
     }
 
     private fun encodeCanonicalSealPayload(grant: RuleCapabilityGrant): ByteArray {
