@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,7 +21,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +46,12 @@ import com.nava.domain.security.AuditLogEntry
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 
 /**
  * Presentation severity bucket for an [AuditLogEntry.decision].
@@ -101,7 +105,7 @@ fun AuditLogScreen(
     activeLocale: Locale,
     modifier: Modifier = Modifier
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = NavaThemeExtras.colors
     val haptics = LocalHapticFeedback.current
     val displayEntries = remember(state.filteredAuditEntries) {
@@ -116,95 +120,117 @@ fun AuditLogScreen(
         color = colors.bgPaper,
         modifier = modifier.fillMaxSize()
     ) {
-    Column(
+    // Lazily composed: the log holds up to DEFAULT_AUDIT_LOG_LIMIT (200) rows, which a
+    // verticalScroll Column would compose and measure all at once when the screen opens.
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.bgPaper)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .background(colors.bgPaper),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
     ) {
-        // Single editorial header row matching reference design (no bulky pills or boxes)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 2.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.audit_title).uppercase(activeLocale),
-                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp),
-                fontWeight = FontWeight.Medium,
-                color = colors.inkMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 10.dp)
-            )
+        item(key = "audit_header") {
+            // Single editorial header row matching reference design (no bulky pills or boxes)
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = stringResource(R.string.audit_entries_count, displayEntries.size),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFeatureSettings = "tnum"
-                    ),
-                    fontFamily = FontFamily.Monospace,
-                    color = colors.inkMuted
-                )
-                val isDeniedOnly = state.auditFilter == AuditLogFilter.DENIED_ONLY
-                Text(
-                    text = if (isDeniedOnly) {
-                        stringResource(R.string.audit_filter_all)
-                    } else {
-                        stringResource(R.string.audit_filter_denied)
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (isDeniedOnly) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (isDeniedOnly) colors.alertCrimson else colors.inkSecondary,
+                    text = stringResource(R.string.audit_title).uppercase(activeLocale),
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp),
+                    fontWeight = FontWeight.Medium,
+                    color = colors.inkMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            viewModel.setAuditFilter(
-                                if (isDeniedOnly) AuditLogFilter.ALL else AuditLogFilter.DENIED_ONLY
-                            )
-                        }
-                        .padding(vertical = 2.dp)
+                        .weight(1f)
+                        .padding(end = 10.dp)
                 )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.audit_entries_count, displayEntries.size),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFeatureSettings = "tnum"
+                        ),
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.inkMuted
+                    )
+                    val isDeniedOnly = state.auditFilter == AuditLogFilter.DENIED_ONLY
+                    Text(
+                        text = if (isDeniedOnly) {
+                            stringResource(R.string.audit_filter_all)
+                        } else {
+                            stringResource(R.string.audit_filter_denied)
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isDeniedOnly) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (isDeniedOnly) colors.alertCrimson else colors.inkSecondary,
+                        modifier = Modifier
+                            .clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.setAuditFilter(
+                                    if (isDeniedOnly) AuditLogFilter.ALL else AuditLogFilter.DENIED_ONLY
+                                )
+                            }
+                            .padding(vertical = 2.dp)
+                    )
+                }
             }
+            Spacer(modifier = Modifier.height(10.dp))
         }
 
-        // Grouped append-only audit log list with 0.5.dp hairline dividers
-        Surface(
-            color = colors.surfaceCard,
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, colors.borderStone),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (displayEntries.isEmpty()) {
+        // Grouped append-only audit log list with 0.5.dp hairline dividers. Each row paints its
+        // slice of the card so the group still reads as one rounded card.
+        if (displayEntries.isEmpty()) {
+            item(key = "audit_empty") {
+                Surface(
+                    color = colors.surfaceCard,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, colors.borderStone),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text(
                         text = stringResource(R.string.audit_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkMuted,
                         modifier = Modifier.padding(16.dp)
                     )
-                } else {
-                    displayEntries.forEachIndexed { index, entry ->
-                        AuditLogEntryRow(
-                            entry = entry,
-                            bidiFormatter = bidiFormatter,
-                            activeLocale = activeLocale
+                }
+            }
+        } else {
+            itemsIndexed(
+                items = displayEntries,
+                key = { index, entry -> if (entry.id != 0L) entry.id else "audit_idx_$index" }
+            ) { index, entry ->
+                val isFirst = index == 0
+                val isLast = index == displayEntries.lastIndex
+                val shape = RoundedCornerShape(
+                    topStart = if (isFirst) 14.dp else 0.dp,
+                    topEnd = if (isFirst) 14.dp else 0.dp,
+                    bottomStart = if (isLast) 14.dp else 0.dp,
+                    bottomEnd = if (isLast) 14.dp else 0.dp
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(shape)
+                        .background(colors.surfaceCard)
+                ) {
+                    AuditLogEntryRow(
+                        entry = entry,
+                        bidiFormatter = bidiFormatter,
+                        activeLocale = activeLocale
+                    )
+                    if (!isLast) {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = colors.borderStone
                         )
-                        if (index < displayEntries.lastIndex) {
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = colors.borderStone
-                            )
-                        }
                     }
                 }
             }

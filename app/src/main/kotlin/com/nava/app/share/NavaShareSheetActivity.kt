@@ -35,7 +35,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -56,6 +55,7 @@ import com.nava.app.ui.theme.NavaTheme
 import com.nava.app.ui.theme.NavaThemeExtras
 import com.nava.app.ui.theme.NavaThemeMode
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Modal bottom-sheet [AppCompatActivity] receiving `Intent.ACTION_SEND` (`text/plain`) payloads
@@ -88,11 +88,11 @@ class NavaShareSheetActivity : AppCompatActivity() {
         handleIncomingShareIntent(intent)
 
         setContent {
-            val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsState()
+            val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsStateWithLifecycle()
             val activeLocale = remember(activeLocaleTag) {
                 Locale.forLanguageTag(activeLocaleTag)
             }
-            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
+            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsStateWithLifecycle()
             val darkOverride = when (themeMode) {
                 NavaThemeMode.DARK -> true
                 NavaThemeMode.LIGHT -> false
@@ -142,7 +142,7 @@ private fun NavaShareSheetContent(
     locale: Locale,
     onDismissSheet: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = NavaThemeExtras.colors
     val scrimInteraction = remember { MutableInteractionSource() }
     val sheetInteraction = remember { MutableInteractionSource() }

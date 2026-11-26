@@ -27,7 +27,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +41,7 @@ import com.nava.app.ui.components.NavaIcons
 import com.nava.app.ui.theme.NavaThemeExtras
 import com.nava.domain.security.RuleApprovalState
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Automations & Routines screen displaying the Global Pause switch, Routine Consent Cards
@@ -55,7 +55,7 @@ fun RoutinesScreen(
     activeLocale: Locale = Locale.forLanguageTag("en"),
     modifier: Modifier = Modifier
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val locale = activeLocale
     val colors = NavaThemeExtras.colors
 

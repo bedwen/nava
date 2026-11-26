@@ -35,7 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +67,7 @@ import com.nava.domain.security.RuleApprovalState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Unified Vault and Routine Studio screen in Warm Paper / Matte OLED Dark flat editorial
@@ -83,8 +83,8 @@ fun VaultScreen(
     activity: FragmentActivity?,
     modifier: Modifier = Modifier
 ) {
-    val settingsState by settingsViewModel.uiState.collectAsState()
-    val routinesState by routinesViewModel.uiState.collectAsState()
+    val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+    val routinesState by routinesViewModel.uiState.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
     val colors = NavaThemeExtras.colors
 

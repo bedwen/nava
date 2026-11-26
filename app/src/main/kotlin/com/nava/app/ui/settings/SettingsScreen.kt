@@ -47,7 +47,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +74,7 @@ import com.nava.app.ui.theme.NavaExtendedColors
 import com.nava.app.ui.theme.NavaThemeExtras
 import com.nava.app.ui.theme.NavaThemeMode
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Settings screen providing:
@@ -97,7 +97,7 @@ fun SettingsScreen(
     themeMode: NavaThemeMode = NavaThemeMode.SYSTEM,
     onSelectThemeMode: (NavaThemeMode) -> Unit = {}
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val colors = NavaThemeExtras.colors

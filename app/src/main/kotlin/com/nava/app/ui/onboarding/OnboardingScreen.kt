@@ -39,7 +39,6 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -60,6 +59,7 @@ import com.nava.app.ui.theme.NavaExtendedColors
 import com.nava.app.ui.theme.NavaThemeExtras
 import com.nava.domain.ai.RamTier
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Multi-step Default-Deny Onboarding Wizard Compose screen (Requirement 5).
@@ -70,7 +70,7 @@ fun OnboardingScreen(
     onOnboardingFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val colors = NavaThemeExtras.colors

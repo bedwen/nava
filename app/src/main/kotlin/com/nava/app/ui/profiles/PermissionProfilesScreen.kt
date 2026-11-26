@@ -39,7 +39,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +67,7 @@ import com.nava.domain.security.PermissionProfile
 import com.nava.feature.automations.common.InstalledAppInfo
 import com.nava.feature.automations.common.ToolTargetIds
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private const val TAB_FEATURES: Int = 0
 private const val TAB_APPS: Int = 1
@@ -90,7 +90,7 @@ fun PermissionProfilesScreen(
     initialFocusedTargetId: String? = null,
     modifier: Modifier = Modifier
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val locale = activeLocale
