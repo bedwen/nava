@@ -607,7 +607,7 @@ class LiteRtLlmEngine(
 
     override suspend fun unloadModel() {
         inferenceMutex.withLock {
-            lifecycleManager.forceUnload {
+            lifecycleManager.forceUnload(modelSlot) {
                 runtimeAdapter.unload()
             }
             coordinator?.markUnloaded(modelSlot)
@@ -692,7 +692,7 @@ class LiteRtLlmEngine(
 
         return inferenceMutex.withLock {
             if (lifecycleManager.currentThermalState() == ThermalState.SEVERE_OR_HIGHER) {
-                lifecycleManager.forceUnload { runtimeAdapter.unload() }
+                lifecycleManager.forceUnload(modelSlot) { runtimeAdapter.unload() }
                 coordinator?.markUnloaded(modelSlot)
                 val reason = "Thermal throttling SEVERE"
                 emitChunk(LlmStreamChunk.Aborted(reason = reason))
@@ -732,7 +732,7 @@ class LiteRtLlmEngine(
             }
 
             try {
-                lifecycleManager.onEnsureLoaded {
+                lifecycleManager.onEnsureLoaded(modelSlot) {
                     runtimeAdapter.ensureMasterPrefix(
                         modelPath = modelPath,
                         systemPrefixId = request.systemPrefixId,
@@ -794,13 +794,14 @@ class LiteRtLlmEngine(
             } finally {
                 withContext(NonCancellable) {
                     lifecycleManager.onTurnCompleted(
+                        slot = modelSlot,
                         immediateUnloader = {
                             runtimeAdapter.unload()
                             coordinator?.markUnloaded(modelSlot)
                         },
                         deferredIdleUnloader = { expectedGen ->
                             inferenceMutex.withLock {
-                                if (lifecycleManager.consumePendingIdleUnload(expectedGen)) {
+                                if (lifecycleManager.consumePendingIdleUnload(modelSlot, expectedGen)) {
                                     runtimeAdapter.unload()
                                     coordinator?.markUnloaded(modelSlot)
                                 }

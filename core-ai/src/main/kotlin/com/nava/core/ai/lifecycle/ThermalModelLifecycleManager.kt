@@ -90,10 +90,32 @@ class ThermalModelLifecycleManager(
     private val hardwareStatusProvider: DeviceHardwareStatusProvider,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) {
+    /**
+     * One instance is shared by every [ModelSlot] (primary LLM, FunctionGemma router,
+     * EmbeddingGemma). Residency state is therefore tracked per slot, so a turn on one model never
+     * cancels or invalidates the idle unload of another model.
+     */
+    private class SlotResidency {
+        var idleUnloadJob: Job? = null
+        var generation: Long = 0L
+        var modelLoaded: Boolean = false
+    }
+
     private val mutex = Mutex()
-    private var idleUnloadJob: Job? = null
-    private var generation: Long = 0L
-    private var modelLoaded: Boolean = false
+    private val residencyBySlot: Map<ModelSlot, SlotResidency> =
+        ModelSlot.entries.associateWith { SlotResidency() }
+
+    private fun residency(slot: ModelSlot): SlotResidency = residencyBySlot.getValue(slot)
+
+    /** Returns true when [slot] is marked resident (test and diagnostics hook). */
+    suspend fun isSlotResident(slot: ModelSlot): Boolean = mutex.withLock {
+        residency(slot).modelLoaded
+    }
+
+    /** Returns true when [slot] has an armed idle unload timer (test and diagnostics hook). */
+    suspend fun hasPendingIdleUnload(slot: ModelSlot): Boolean = mutex.withLock {
+        residency(slot).idleUnloadJob?.isActive == true
+    }
 
     fun currentRamTier(): RamTier {
         val snapshot = hardwareStatusProvider.readSnapshot()
@@ -145,33 +167,41 @@ class ThermalModelLifecycleManager(
     }
 
     /**
-     * Cancels any pending idle unload timer, verifies thermal eligibility, advances the turn
-     * generation counter, and invokes [loader] under [mutex] synchronization.
+     * Cancels any pending idle unload timer of [slot], verifies thermal eligibility, advances the
+     * slot's turn generation counter, and invokes [loader] under [mutex] synchronization.
      */
-    suspend fun <T> onEnsureLoaded(loader: suspend () -> T): T {
+    suspend fun <T> onEnsureLoaded(
+        slot: ModelSlot = ModelSlot.PRIMARY_LLM,
+        loader: suspend () -> T
+    ): T {
         return mutex.withLock {
-            cancelIdleTimerLocked()
+            val state = residency(slot)
+            cancelIdleTimerLocked(state)
             if (!canRunLlm()) {
                 throw IllegalStateException("Thermal throttling SEVERE prevents loading LLM")
             }
-            generation++
+            state.generation++
             val result = loader()
-            modelLoaded = true
+            state.modelLoaded = true
             result
         }
     }
 
     /**
-     * Called when an inference turn finishes. Unloads immediately if the effective idle timeout
-     * is `0` or thermal state is `SEVERE_OR_HIGHER`; otherwise arms a cancellable idle timer.
+     * Called when an inference turn on [slot] finishes. Unloads immediately if the effective idle
+     * timeout is `0` or thermal state is `SEVERE_OR_HIGHER`; otherwise arms a cancellable idle timer.
      *
      * Never invokes [unloader] while holding [mutex], preserving a deadlock-free lock hierarchy.
      */
-    suspend fun onTurnCompleted(unloader: suspend () -> Unit) {
+    suspend fun onTurnCompleted(
+        slot: ModelSlot = ModelSlot.PRIMARY_LLM,
+        unloader: suspend () -> Unit
+    ) {
         onTurnCompleted(
+            slot = slot,
             immediateUnloader = unloader,
             deferredIdleUnloader = { expectedGen ->
-                if (consumePendingIdleUnload(expectedGen)) {
+                if (consumePendingIdleUnload(slot, expectedGen)) {
                     unloader()
                 }
             }
@@ -184,22 +214,29 @@ class ThermalModelLifecycleManager(
      * delay so callers such as `LiteRtLlmEngine` can acquire `inferenceMutex` BEFORE checking
      * [consumePendingIdleUnload], guaranteeing strict `inferenceMutex -> lifecycleManager.mutex`
      * lock ordering).
+     *
+     * [minimumIdleTimeoutSec] lets bursty callers (e.g. embedding a batch of tool descriptions)
+     * keep weights resident for a short grace window instead of reloading them on every call.
+     * It never delays the immediate unload required under `SEVERE_OR_HIGHER` thermal state.
      */
     suspend fun onTurnCompleted(
+        slot: ModelSlot = ModelSlot.PRIMARY_LLM,
         immediateUnloader: suspend () -> Unit,
-        deferredIdleUnloader: suspend (expectedGeneration: Long) -> Unit
+        deferredIdleUnloader: suspend (expectedGeneration: Long) -> Unit,
+        minimumIdleTimeoutSec: Int = 0
     ) {
         val shouldUnloadImmediately: Boolean = mutex.withLock {
-            cancelIdleTimerLocked()
-            val expectedGen = generation
-            val timeoutSec = effectiveIdleUnloadTimeoutSec()
+            val state = residency(slot)
+            cancelIdleTimerLocked(state)
+            val expectedGen = state.generation
+            val timeoutSec = maxOf(effectiveIdleUnloadTimeoutSec(), minimumIdleTimeoutSec)
             if (timeoutSec <= 0 || currentThermalState() == ThermalState.SEVERE_OR_HIGHER) {
-                modelLoaded = false
-                generation++
+                state.modelLoaded = false
+                state.generation++
                 true
             } else {
                 val delayMs = timeoutSec.toLong() * 1000L
-                idleUnloadJob = scope.launch {
+                state.idleUnloadJob = scope.launch {
                     delay(delayMs)
                     if (!isActive) return@launch
                     deferredIdleUnloader(expectedGen)
@@ -214,38 +251,50 @@ class ThermalModelLifecycleManager(
     }
 
     /**
-     * Atomically verifies that [expectedGeneration] is still the latest active generation and
-     * marks the model unloaded. Returns `true` only if the caller should proceed with unloading
-     * native weights, preventing a stale idle timer from evicting a newly loaded turn.
+     * Atomically verifies that [expectedGeneration] is still the latest active generation of
+     * [slot] and marks it unloaded. Returns `true` only if the caller should proceed with
+     * unloading native weights, preventing a stale idle timer from evicting a newly loaded turn.
      */
-    suspend fun consumePendingIdleUnload(expectedGeneration: Long): Boolean {
+    suspend fun consumePendingIdleUnload(
+        slot: ModelSlot,
+        expectedGeneration: Long
+    ): Boolean {
         return mutex.withLock {
-            if (generation != expectedGeneration) {
+            val state = residency(slot)
+            if (state.generation != expectedGeneration) {
                 return@withLock false
             }
-            idleUnloadJob = null
-            modelLoaded = false
-            generation++
+            state.idleUnloadJob = null
+            state.modelLoaded = false
+            state.generation++
             true
         }
     }
 
+    /** Primary-slot shorthand for [consumePendingIdleUnload]. */
+    suspend fun consumePendingIdleUnload(expectedGeneration: Long): Boolean =
+        consumePendingIdleUnload(ModelSlot.PRIMARY_LLM, expectedGeneration)
+
     /**
-     * Immediately cancels any pending idle unload timer, invalidates prior generations, and
-     * executes [unloader] OUTSIDE [mutex].
+     * Immediately cancels any pending idle unload timer of [slot], invalidates its prior
+     * generations, and executes [unloader] OUTSIDE [mutex].
      */
-    suspend fun forceUnload(unloader: suspend () -> Unit) {
+    suspend fun forceUnload(
+        slot: ModelSlot = ModelSlot.PRIMARY_LLM,
+        unloader: suspend () -> Unit
+    ) {
         mutex.withLock {
-            cancelIdleTimerLocked()
-            modelLoaded = false
-            generation++
+            val state = residency(slot)
+            cancelIdleTimerLocked(state)
+            state.modelLoaded = false
+            state.generation++
         }
         unloader()
     }
 
-    private fun cancelIdleTimerLocked() {
-        idleUnloadJob?.cancel()
-        idleUnloadJob = null
+    private fun cancelIdleTimerLocked(state: SlotResidency) {
+        state.idleUnloadJob?.cancel()
+        state.idleUnloadJob = null
     }
 
     companion object {

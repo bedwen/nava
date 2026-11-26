@@ -16,6 +16,7 @@ import com.nava.domain.ai.ThermalState
 import com.nava.domain.security.Gemma4InputSanitizer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -171,7 +172,9 @@ class LiteRtEmbeddingEngine(
 
     override suspend fun unloadEmbeddingModel() {
         embeddingMutex.withLock {
-            runtimeAdapter.unload()
+            lifecycleManager.forceUnload(ModelSlot.EMBEDDING_ENGINE) {
+                runtimeAdapter.unload()
+            }
             coordinator?.markUnloaded(ModelSlot.EMBEDDING_ENGINE)
         }
     }
@@ -197,8 +200,10 @@ class LiteRtEmbeddingEngine(
             }
 
             try {
-                runtimeAdapter.ensureLoaded(modelPath)
-                coordinator?.markLoaded(ModelSlot.EMBEDDING_ENGINE)
+                lifecycleManager.onEnsureLoaded(ModelSlot.EMBEDDING_ENGINE) {
+                    runtimeAdapter.ensureLoaded(modelPath)
+                    coordinator?.markLoaded(ModelSlot.EMBEDDING_ENGINE)
+                }
                 runtimeAdapter.computeEmbedding(formattedInput)
             } catch (ce: CancellationException) {
                 if (!runtimeAdapter.isLoaded()) {
@@ -210,7 +215,42 @@ class LiteRtEmbeddingEngine(
                     coordinator?.markUnloaded(ModelSlot.EMBEDDING_ENGINE)
                 }
                 null
+            } finally {
+                withContext(NonCancellable) {
+                    scheduleIdleUnloadLocked()
+                }
             }
         }
+    }
+
+    /**
+     * Arms the per-slot idle unload timer (or unloads immediately on Tier 0 / non-normal thermal
+     * state). Must be called while holding [embeddingMutex]; the deferred unloader re-acquires
+     * [embeddingMutex] before the lifecycle mutex, preserving the
+     * `embeddingMutex -> lifecycleManager.mutex` lock ordering.
+     */
+    private suspend fun scheduleIdleUnloadLocked() {
+        if (!runtimeAdapter.isLoaded()) return
+        lifecycleManager.onTurnCompleted(
+            slot = ModelSlot.EMBEDDING_ENGINE,
+            immediateUnloader = {
+                runtimeAdapter.unload()
+                coordinator?.markUnloaded(ModelSlot.EMBEDDING_ENGINE)
+            },
+            deferredIdleUnloader = { expectedGen ->
+                embeddingMutex.withLock {
+                    if (lifecycleManager.consumePendingIdleUnload(ModelSlot.EMBEDDING_ENGINE, expectedGen)) {
+                        runtimeAdapter.unload()
+                        coordinator?.markUnloaded(ModelSlot.EMBEDDING_ENGINE)
+                    }
+                }
+            },
+            minimumIdleTimeoutSec = EMBEDDING_BURST_IDLE_TIMEOUT_SEC
+        )
+    }
+
+    private companion object {
+        /** Grace window keeping the ~300M embedding model resident across a burst of calls. */
+        const val EMBEDDING_BURST_IDLE_TIMEOUT_SEC: Int = 15
     }
 }
