@@ -22,6 +22,7 @@ import com.nava.domain.ai.ResolutionTier
 import com.nava.domain.ai.SlotValueAst
 import com.nava.domain.ai.ToolCallAst
 import com.nava.domain.automation.BackgroundTaskRequest
+import com.nava.domain.security.AtomicCapability
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.CapabilityToken
 import com.nava.domain.security.DataProvenance
@@ -69,6 +70,11 @@ data class InspectedNeuronDetails(
 
 /**
  * Immutable history entry rendered in the Hub's local actions / chat dock.
+ *
+ * [bodyProvenance] records where [body] came from. Bodies that embed tool output (notification
+ * summaries, note excerpts, calendar event titles, daily briefings) are
+ * [DataProvenance.UNTRUSTED_EXTERNAL] and must never be replayed into Stage 1 planning history
+ * (PLAN.md Section 5.3, rule 2).
  */
 data class HubActionHistoryItem(
     val id: String,
@@ -79,8 +85,41 @@ data class HubActionHistoryItem(
     val messageKey: MessageKey? = null,
     val isError: Boolean = false,
     val deniedTargetId: String? = null,
-    val deniedNeuron: NeuronNodeId? = null
+    val deniedNeuron: NeuronNodeId? = null,
+    val bodyProvenance: DataProvenance = DataProvenance.SYSTEM
 )
+
+/**
+ * Builds the Stage 1 conversation history from Hub entries without ever replaying
+ * [DataProvenance.UNTRUSTED_EXTERNAL] content. For an untrusted body only the localized,
+ * template-rendered [HubActionHistoryItem.title] is used, so follow-up turns keep continuity
+ * ("what did you just do?") without exposing external text to the planner.
+ */
+internal fun buildStage1SessionHistory(
+    priorEntries: List<HubActionHistoryItem>,
+    maxTurns: Int
+): List<ConversationTurn> {
+    return priorEntries
+        .mapIndexedNotNull { idx, entry ->
+            val isImmediatelyPrior = idx == priorEntries.lastIndex
+            if (entry.isError && !isImmediatelyPrior) {
+                return@mapIndexedNotNull null
+            }
+            val trustedBody = if (entry.bodyProvenance.isUntrusted) {
+                entry.title
+            } else {
+                entry.body
+            }
+            val reply = entry.conversationalReply?.takeIf { it.isNotBlank() }
+                ?: trustedBody?.takeIf { it.isNotBlank() }
+                ?: return@mapIndexedNotNull null
+            ConversationTurn(
+                userUtterance = entry.userQuery,
+                assistantReply = reply
+            )
+        }
+        .takeLast(maxTurns)
+}
 
 /**
  * Dual interaction mode for the Hub:
@@ -463,21 +502,10 @@ class NavaHubViewModel(
             }
             val priorEntries = sourceHistory
                 .filter { it.id != reqId && it.userQuery.isNotBlank() }
-            val sessionHistory = priorEntries
-                .mapIndexedNotNull { idx, entry ->
-                    val isImmediatelyPrior = idx == priorEntries.lastIndex
-                    if (entry.isError && !isImmediatelyPrior) {
-                        return@mapIndexedNotNull null
-                    }
-                    val reply = entry.conversationalReply?.takeIf { it.isNotBlank() }
-                        ?: entry.body?.takeIf { it.isNotBlank() }
-                        ?: return@mapIndexedNotNull null
-                    ConversationTurn(
-                        userUtterance = entry.userQuery,
-                        assistantReply = reply
-                    )
-                }
-                .takeLast(MAX_SESSION_HISTORY_TURNS)
+            val sessionHistory = buildStage1SessionHistory(
+                priorEntries = priorEntries,
+                maxTurns = MAX_SESSION_HISTORY_TURNS
+            )
 
             try {
                 val resolution = if (modeAtSubmit == HubWorkMode.CHAT) {
@@ -819,6 +847,11 @@ class NavaHubViewModel(
                 } else {
                     baseBody
                 }
+                val bodyProvenance = if (richPayload != null || planReadsExternalData(plan)) {
+                    DataProvenance.UNTRUSTED_EXTERNAL
+                } else {
+                    DataProvenance.SYSTEM
+                }
                 _uiState.update { state ->
                     val updatedHistory = updateHistoryEntry(
                         history = state.actionHistory,
@@ -828,7 +861,8 @@ class NavaHubViewModel(
                             title = title,
                             body = body,
                             messageKey = lastResult.message.key,
-                            isError = false
+                            isError = false,
+                            bodyProvenance = bodyProvenance
                         )
                     }
                     state.copy(
@@ -1051,6 +1085,19 @@ class NavaHubViewModel(
             touchesVault = false,
             nowEpochSec = nowEpochMs / 1000L
         )
+    }
+
+    /**
+     * Returns true when any step reads data that originates outside the user's utterance
+     * (notifications, calendar entries, notes, SAF files). Such tool output is untrusted.
+     */
+    private fun planReadsExternalData(plan: PlanAst): Boolean {
+        return plan.calls.any { call ->
+            val capability = container.toolRegistry.find(call.toolName)?.metadata?.requiredCapability
+            capability == null ||
+                capability == AtomicCapability.DATA_READ ||
+                capability == AtomicCapability.NOTIFICATION_READ
+        }
     }
 
     private fun planTouchesVault(plan: PlanAst, targetContextId: String): Boolean {
@@ -1651,7 +1698,9 @@ class NavaHubViewModel(
             body = body,
             conversationalReply = null,
             messageKey = MessageKey.ACTION_BRIEFING_READY,
-            isError = false
+            isError = false,
+            // Briefings aggregate notifications and calendar events from external senders.
+            bodyProvenance = DataProvenance.UNTRUSTED_EXTERNAL
         )
         _uiState.update { state ->
             state.copy(
