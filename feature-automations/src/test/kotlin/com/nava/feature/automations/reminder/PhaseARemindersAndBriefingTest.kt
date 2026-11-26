@@ -262,6 +262,43 @@ class PhaseARemindersAndBriefingTest {
         assertFalse(created.canExecuteUnattended())
     }
 
+    private fun routineArgs(actionTool: String, actionArgs: String? = null) = buildMap {
+        put("rule_name", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("Evening"), SensitiveSlotKind.EVENT_TITLE))
+        put("trigger_type", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("TIME_OF_DAY"), SensitiveSlotKind.TEXT_BODY))
+        put("trigger_time", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("22:00"), SensitiveSlotKind.DATE_TIME))
+        put("action_tool", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue(actionTool), SensitiveSlotKind.INTENT_ACTION))
+        if (actionArgs != null) {
+            put("action_args", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue(actionArgs), SensitiveSlotKind.TEXT_BODY))
+        }
+    }
+
+    @Test
+    fun proposeRoutineSupportsMultiStepActionsInOrder() = runBlocking {
+        val rulePort = FakeRuleGrantPort()
+        val audit = FakeAuditLog()
+        val scheduleTool = ScheduleReminderTool(FakeReminderPort(), FakeSchedulerPort(), audit)
+        val registry = ToolRegistry(listOf(scheduleTool, ProposeRoutineTool(rulePort, { ToolRegistry(emptyList()) }, audit)))
+        val proposeTool = ProposeRoutineTool(rulePort, { registry }, audit, clock = { 1_700_000_000_000L })
+        val ctx = userContext(AutomationToolNames.PROPOSE_ROUTINE)
+
+        val ok = proposeTool.execute(
+            ctx,
+            routineArgs("schedule_reminder, schedule_reminder", "title=Water;delay_minutes=5|title=Sleep;delay_minutes=30")
+        )
+        assertTrue(ok is ToolResult.Success)
+        val actions = rulePort.findRule("evening")!!.staticActions
+        assertEquals(2, actions.size)
+        assertEquals("Water", actions[0].staticArguments["title"])
+        assertEquals("Sleep", actions[1].staticArguments["title"])
+        assertEquals(RuleApprovalState.PENDING_USER_APPROVAL, rulePort.findRule("evening")!!.approvalState)
+
+        // Too many actions, a routine that proposes routines, and unknown tools are all refused.
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,schedule_reminder,schedule_reminder,schedule_reminder")) is ToolResult.Failure)
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,propose_routine")) is ToolResult.Failure)
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,wipe_device")) is ToolResult.Failure)
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "a=1|b=2")) is ToolResult.Failure)
+    }
+
     @Test
     fun notificationSummaryDifferentiatesNoPermittedAppsAndGroupsUrgency() = runBlocking {
         val inbox = InMemoryNotificationInbox()

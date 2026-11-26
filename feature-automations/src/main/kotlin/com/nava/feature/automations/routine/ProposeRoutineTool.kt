@@ -75,14 +75,14 @@ class ProposeRoutineTool(
             ),
             ToolSchemaField(
                 name = "action_tool",
-                description = "Canonical Nava tool name to execute when triggered (e.g. set_dnd, summarize_notifications)",
+                description = "Nava tool to run when triggered; up to 3 comma-separated tools run in order (e.g. set_dnd,set_volume)",
                 required = true,
                 slotKind = SensitiveSlotKind.INTENT_ACTION,
                 valueType = SlotValueType.STRING
             ),
             ToolSchemaField(
                 name = "action_args",
-                description = "Optional semicolon-separated key=value static arguments (e.g. mode=PRIORITY)",
+                description = "Optional key=value;key=value static arguments; separate each tool's group with | in tool order (e.g. enabled=true|level=20)",
                 required = false,
                 slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
@@ -127,35 +127,53 @@ class ProposeRoutineTool(
             )
         }
 
-        val actionToolName = actionToolRaw.trim().lowercase(Locale.US)
-        val registry = toolRegistryProvider()
-        val targetTool = registry.find(actionToolName)
-            ?: return ToolResult.Failure(
-                message = UserMessage(
-                    key = MessageKey.ERROR_TOOL_NOT_FOUND,
-                    args = listOf(MessageArg.Text(actionToolName))
-                ),
-                errorCode = "TOOL_NOT_FOUND"
+        val actionToolNames = actionToolRaw.split(',')
+            .map { it.trim().lowercase(Locale.US) }
+            .filter { it.isNotEmpty() }
+        if (actionToolNames.isEmpty() || actionToolNames.size > MAX_ROUTINE_ACTIONS) {
+            return ToolArgumentReader.invalidArgumentsFailure(
+                "action_tool must name 1 to $MAX_ROUTINE_ACTIONS tools"
             )
+        }
+        val argGroups = actionArgsRaw?.split('|').orEmpty()
+        if (argGroups.size > actionToolNames.size) {
+            return ToolArgumentReader.invalidArgumentsFailure("action_args has more groups than action_tool")
+        }
+
+        val registry = toolRegistryProvider()
+        val actionSpecs = ArrayList<RuleActionSpec>(actionToolNames.size)
+        for ((index, actionToolName) in actionToolNames.withIndex()) {
+            if (actionToolName in NON_ROUTINE_ACTIONS) {
+                return ToolArgumentReader.invalidArgumentsFailure(
+                    "Tool '$actionToolName' cannot be an action of a routine"
+                )
+            }
+            val targetTool = registry.find(actionToolName)
+                ?: return ToolResult.Failure(
+                    message = UserMessage(
+                        key = MessageKey.ERROR_TOOL_NOT_FOUND,
+                        args = listOf(MessageArg.Text(actionToolName))
+                    ),
+                    errorCode = "TOOL_NOT_FOUND"
+                )
+            val actionSpec = RuleActionSpec(
+                toolName = targetTool.metadata.name,
+                requiredCapability = targetTool.metadata.requiredCapability,
+                staticArguments = parseStaticArguments(argGroups.getOrNull(index)),
+                requiresBiometric = actionToolName in AutomationToolNames.VAULT_TOOLS
+            )
+            if (!targetTool.metadata.supportsUnattendedRule && !actionSpec.requiresInteractiveConfirmation) {
+                return ToolArgumentReader.invalidArgumentsFailure(
+                    "Tool '${targetTool.metadata.name}' cannot be scheduled in a background routine"
+                )
+            }
+            actionSpecs.add(actionSpec)
+        }
+        val actionToolName = actionToolNames.joinToString(",")
 
         val triggerParams = LinkedHashMap<String, String>()
         if (!triggerTimeRaw.isNullOrBlank()) {
             triggerParams["time"] = triggerTimeRaw.trim()
-        }
-
-        val staticArgs = parseStaticArguments(actionArgsRaw)
-
-        val requiresBiometric = actionToolName in AutomationToolNames.VAULT_TOOLS
-        val actionSpec = RuleActionSpec(
-            toolName = targetTool.metadata.name,
-            requiredCapability = targetTool.metadata.requiredCapability,
-            staticArguments = staticArgs,
-            requiresBiometric = requiresBiometric
-        )
-        if (!targetTool.metadata.supportsUnattendedRule && !actionSpec.requiresInteractiveConfirmation) {
-            return ToolArgumentReader.invalidArgumentsFailure(
-                "Tool '${targetTool.metadata.name}' cannot be scheduled in a background routine"
-            )
         }
 
         val nowMs = clock()
@@ -165,7 +183,7 @@ class ProposeRoutineTool(
                 triggerType = triggerType,
                 parameters = triggerParams
             ),
-            staticActions = listOf(actionSpec),
+            staticActions = actionSpecs,
             nowEpochSec = nowMs / 1000L
         )
 
@@ -226,6 +244,15 @@ class ProposeRoutineTool(
     }
 
     companion object {
+        const val MAX_ROUTINE_ACTIONS: Int = 3
+
+        /** Tools that must never run from a routine (no self-replicating or memory-writing routines). */
+        val NON_ROUTINE_ACTIONS: Set<String> = setOf(
+            AutomationToolNames.PROPOSE_ROUTINE,
+            AutomationToolNames.REMEMBER_FACT,
+            AutomationToolNames.FORGET_FACT
+        )
+
         val ALLOWED_TRIGGER_TYPES: Set<String> = setOf(
             "TIME_OF_DAY",
             "CHARGING",
