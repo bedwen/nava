@@ -56,6 +56,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -905,6 +910,17 @@ private fun HubCommandDock(
                         .focusRequester(commandFocusRequester)
                         .onFocusChanged { focusState ->
                             if (focusState.isFocused) onCommandFieldFocused()
+                        }
+                        // A hardware Enter submits on key-up and consumes both halves of the key
+                        // press. Otherwise submit clears focus on key-down, focus moves to the next
+                        // focusable control (the audit log button) and the key-up clicks it.
+                        .onPreviewKeyEvent { event ->
+                            if (event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                                if (event.type == KeyEventType.KeyUp && canSend) onSubmitQuery()
+                                true
+                            } else {
+                                false
+                            }
                         }
                         .padding(vertical = 8.dp),
                     singleLine = true,
