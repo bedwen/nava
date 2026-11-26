@@ -80,19 +80,16 @@ object NotificationWatcherMatcher {
         val foldedTitle = fold(notification.title.value)
         val foldedBody = fold(notification.body.value)
         val combined = "$foldedTitle $foldedBody"
+        val combinedNoSpaces = combined.replace(" ", "")
 
         val sender = watcher.senderFilter?.trim()?.takeIf { it.isNotEmpty() }
-        if (sender != null) {
-            val foldedSender = fold(sender)
-            if (foldedSender.isNotEmpty() && !combined.contains(foldedSender)) {
-                return false
-            }
+        if (sender != null && !matchesTerm(sender, combined, combinedNoSpaces)) {
+            return false
         }
 
         if (watcher.keywords.isNotEmpty()) {
             val anyKeywordMatched = watcher.keywords.any { kw ->
-                val foldedKw = fold(kw)
-                foldedKw.isNotEmpty() && combined.contains(foldedKw)
+                matchesTerm(kw, combined, combinedNoSpaces)
             }
             if (!anyKeywordMatched) {
                 return false
@@ -100,6 +97,41 @@ object NotificationWatcherMatcher {
         }
 
         return true
+    }
+
+    /**
+     * Matches a single user-provided term (keyword, sender name, or email address) against the
+     * folded notification text.
+     *
+     * Gmail and many email clients display only the sender's display name (e.g. "Nezih Erbay" or
+     * "Halit Buluthan Cetintas") in Android notifications rather than the raw email address.
+     * When [rawTerm] is an email address (`local@domain`), this method matches either the full
+     * address OR all meaningful tokens of the local part against both spaced and whitespace-stripped
+     * notification text.
+     */
+    private fun matchesTerm(rawTerm: String, combined: String, combinedNoSpaces: String): Boolean {
+        val foldedTerm = fold(rawTerm)
+        if (foldedTerm.isEmpty()) return false
+        if (combined.contains(foldedTerm)) return true
+
+        val termNoSpaces = foldedTerm.replace(" ", "")
+        if (termNoSpaces.length >= 3 && combinedNoSpaces.contains(termNoSpaces)) return true
+
+        val atIndex = foldedTerm.indexOf('@')
+        if (atIndex > 0) {
+            val localPart = foldedTerm.substring(0, atIndex)
+            val tokens = localPart
+                .split('.', '_', '-', '+')
+                .map { it.trim() }
+                .filter { it.length >= 2 }
+            if (tokens.isNotEmpty() && tokens.all { token ->
+                    combined.contains(token) || combinedNoSpaces.contains(token)
+                }
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun matchesPackage(rawFilter: String, packageName: String): Boolean {
@@ -132,8 +164,27 @@ class NotificationWatcherEngine(
 ) {
     private val recentAlertTimestamps = ConcurrentHashMap<String, Long>()
 
+    @Volatile
+    private var cachedEnabledWatchers: List<NotificationWatcher> = emptyList()
+
+    /**
+     * Refreshes the in-memory enabled watcher snapshot from [watcherPort] while the device is
+     * unlocked so lock-screen notifications can still be evaluated without failing on Keystore
+     * `setUnlockedDeviceRequired(true)`.
+     */
+    suspend fun refreshCache() {
+        val loaded = runCatching { watcherPort.listEnabledWatchers() }.getOrNull() ?: return
+        cachedEnabledWatchers = loaded
+    }
+
     suspend fun onLiveNotificationIngested(notification: CapturedNotification) {
-        val enabledWatchers = runCatching { watcherPort.listEnabledWatchers() }.getOrDefault(emptyList())
+        val fresh = runCatching { watcherPort.listEnabledWatchers() }.getOrNull()
+        val enabledWatchers = if (fresh != null) {
+            cachedEnabledWatchers = fresh
+            fresh
+        } else {
+            cachedEnabledWatchers
+        }
         if (enabledWatchers.isEmpty()) return
 
         val now = clockMs()

@@ -289,21 +289,51 @@ class NavaNotificationListenerService : NotificationListenerService() {
         val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             ?.takeIf { it.isNotBlank() }
             ?: extras?.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString().orEmpty()
-        val bigText = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
-        val plainText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        val bigText = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim()
+        val plainText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim()
         val textLines = extras?.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
             ?.mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotEmpty) }
             ?.takeLast(5)
             ?.joinToString(" | ")
-        val summaryText = extras?.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()
-            ?: extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
-        val text = when {
+        val summaryText = extras?.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()?.trim()
+            ?: extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim()
+        val peopleInfo = extractPeopleInfo(extras)
+        val primaryText = when {
+            !bigText.isNullOrBlank() && !plainText.isNullOrBlank() && !bigText.contains(plainText) ->
+                "$plainText - $bigText"
             !bigText.isNullOrBlank() -> bigText
             !textLines.isNullOrBlank() -> textLines
             !plainText.isNullOrBlank() -> plainText
             !summaryText.isNullOrBlank() -> summaryText
             else -> ""
         }
+        val text = if (peopleInfo.isNotBlank() && !title.contains(peopleInfo, ignoreCase = true) &&
+            !primaryText.contains(peopleInfo, ignoreCase = true)
+        ) {
+            if (primaryText.isBlank()) peopleInfo else "$primaryText ($peopleInfo)"
+        } else {
+            primaryText
+        }
         return title to text
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractPeopleInfo(extras: android.os.Bundle?): String {
+        if (extras == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return ""
+        val people = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                extras.getParcelableArrayList(Notification.EXTRA_PEOPLE_LIST, android.app.Person::class.java)
+            } else {
+                extras.getParcelableArrayList<android.app.Person>(Notification.EXTRA_PEOPLE_LIST)
+            }
+        }.getOrNull().orEmpty()
+        if (people.isEmpty()) return ""
+        return people.mapNotNull { person ->
+            val parts = listOfNotNull(
+                person.name?.toString()?.trim()?.takeIf { it.isNotEmpty() },
+                person.uri?.removePrefix("mailto:")?.trim()?.takeIf { it.isNotEmpty() }
+            )
+            parts.joinToString(" ").takeIf { it.isNotEmpty() }
+        }.distinct().joinToString(", ")
     }
 }

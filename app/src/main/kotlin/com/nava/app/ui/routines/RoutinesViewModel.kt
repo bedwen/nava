@@ -120,6 +120,7 @@ class RoutinesViewModel(
             val briefingConfig = container.morningBriefingPreferencesStore.currentConfig()
             val watchers = runCatching { container.notificationWatcherDao.listWatchers() }
                 .getOrDefault(emptyList())
+            runCatching { container.notificationWatcherEngine.refreshCache() }
 
             _uiState.update { state ->
                 state.copy(

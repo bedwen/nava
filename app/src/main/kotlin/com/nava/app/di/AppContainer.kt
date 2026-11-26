@@ -155,6 +155,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -1071,6 +1072,11 @@ class AppContainer internal constructor(
                 notificationWatcherEngine.onLiveNotificationIngested(captured)
             }
         )
+        // Warm in-memory watcher cache asynchronously while unlocked so lock-screen notifications
+        // never drop on Keystore setUnlockedDeviceRequired(true).
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { notificationWatcherEngine.refreshCache() }
+        }
         appContext?.let { NotificationServiceBinding.requestRebindIfUnbound(it) }
         AutomationWorkerRegistry.bind(
             routineExecutor = routineExecutor,

@@ -254,4 +254,82 @@ class NotificationWatcherTest {
         assertTrue(deleteResult is ToolResult.Success)
         assertEquals(0, port.listWatchers().size)
     }
+
+    @Test
+    fun emailAddressFilterMatchesGmailDisplayNameNotifications() {
+        val singleNameWatcher = NotificationWatcher(
+            watcherId = "watch_email_1",
+            label = "Sender Email",
+            keywords = listOf("alice.smith@gmail.com"),
+            senderFilter = "alice.smith@gmail.com",
+            packageFilter = "Gmail",
+            enabled = true
+        )
+        val gmailNotif = CapturedNotification(
+            notificationKey = "gm_1",
+            packageName = "com.google.android.gm",
+            title = extText("Alice Smith", "com.google.android.gm"),
+            body = extText("Meeting tomorrow at 10", "com.google.android.gm"),
+            postedAtEpochMs = 2_000L
+        )
+        assertTrue(NotificationWatcherMatcher.matches(singleNameWatcher, gmailNotif))
+
+        val multiWordWatcher = NotificationWatcher(
+            watcherId = "watch_email_2",
+            label = "Professor Email",
+            keywords = listOf("firstsecond.lastname@university.edu.tr"),
+            senderFilter = "firstsecond.lastname@university.edu.tr",
+            packageFilter = "mail",
+            enabled = true
+        )
+        val uniNotif = CapturedNotification(
+            notificationKey = "gm_2",
+            packageName = "com.google.android.gm",
+            title = extText("First Second Lastname", "com.google.android.gm"),
+            body = extText("Exam schedule posted", "com.google.android.gm"),
+            postedAtEpochMs = 3_000L
+        )
+        assertTrue(NotificationWatcherMatcher.matches(multiWordWatcher, uniNotif))
+    }
+
+    @Test
+    fun watcherEngineUsesCachedSnapshotWhenKeystoreIsLocked() = runTest {
+        var locked = false
+        val inner = InMemoryWatcherPort()
+        inner.saveWatcher(
+            NotificationWatcher(
+                watcherId = "watch_lock",
+                label = "Lock Screen Test",
+                keywords = listOf("invoice"),
+                enabled = true
+            )
+        )
+        val lockablePort = object : NotificationWatcherPort by inner {
+            override suspend fun listEnabledWatchers(): List<NotificationWatcher> {
+                if (locked) throw SecurityException("Device is locked")
+                return inner.listEnabledWatchers()
+            }
+        }
+        var alertCount = 0
+        val engine = NotificationWatcherEngine(
+            watcherPort = lockablePort,
+            alertPort = NotificationWatcherAlertPort { _, _, _, _ -> alertCount++ },
+            clockMs = { 90_000L }
+        )
+
+        // Warm cache while unlocked
+        engine.refreshCache()
+
+        // Simulate device locked when email arrives
+        locked = true
+        val notif = CapturedNotification(
+            notificationKey = "gm_locked",
+            packageName = "com.google.android.gm",
+            title = extText("Billing", "com.google.android.gm"),
+            body = extText("Your invoice is ready", "com.google.android.gm"),
+            postedAtEpochMs = 90_000L
+        )
+        engine.onLiveNotificationIngested(notif)
+        assertEquals(1, alertCount)
+    }
 }
