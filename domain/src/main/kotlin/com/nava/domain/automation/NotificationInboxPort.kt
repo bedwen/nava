@@ -10,6 +10,10 @@ import com.nava.domain.security.Tainted
  * Security invariant: notification title and body always carry [DataProvenance.UNTRUSTED_EXTERNAL]
  * so downstream summarization or Stage 2 extraction can never treat notification text as trusted
  * user intent.
+ *
+ * [senderHints] holds sender identity extracted from structured notification metadata (for
+ * example `Notification.EXTRA_PEOPLE_LIST` names and `mailto:`/`tel:` addresses), kept separate
+ * from [body] so sender-based matching never trusts free text written by whoever sent the message.
  */
 data class CapturedNotification(
     val notificationKey: String,
@@ -17,7 +21,8 @@ data class CapturedNotification(
     val title: Tainted<String>,
     val body: Tainted<String>,
     val postedAtEpochMs: Long,
-    val channelId: String? = null
+    val channelId: String? = null,
+    val senderHints: Tainted<String>? = null
 ) {
     init {
         require(notificationKey.isNotBlank()) { "CapturedNotification notificationKey must not be blank" }
@@ -27,6 +32,9 @@ data class CapturedNotification(
         }
         require(body.provenance == DataProvenance.UNTRUSTED_EXTERNAL) {
             "CapturedNotification body must carry UNTRUSTED_EXTERNAL provenance"
+        }
+        require(senderHints == null || senderHints.provenance == DataProvenance.UNTRUSTED_EXTERNAL) {
+            "CapturedNotification senderHints must carry UNTRUSTED_EXTERNAL provenance"
         }
     }
 }

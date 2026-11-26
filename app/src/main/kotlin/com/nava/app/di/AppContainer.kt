@@ -658,9 +658,17 @@ class AppContainer internal constructor(
         com.nava.core.security.dao.NotificationWatcherDao(encryptedSqliteStore)
     }
 
+    /**
+     * Single watcher access point for the engine, tools and UI: keeps a lock-screen snapshot that
+     * every mutation refreshes, so nothing can bypass it with a direct DAO write.
+     */
+    val notificationWatcherPort: com.nava.feature.automations.notification.CachingNotificationWatcherPort by lazy {
+        com.nava.feature.automations.notification.CachingNotificationWatcherPort(notificationWatcherDao)
+    }
+
     val notificationWatcherEngine: com.nava.feature.automations.notification.NotificationWatcherEngine by lazy {
         com.nava.feature.automations.notification.NotificationWatcherEngine(
-            watcherPort = notificationWatcherDao,
+            watcherPort = notificationWatcherPort,
             alertPort = com.nava.domain.automation.NotificationWatcherAlertPort { watcher, sourcePkg, title, snippet ->
                 appContext?.let { ctx ->
                     com.nava.app.reminders.ReminderNotificationPoster.postWatcherAlertNotification(
@@ -678,7 +686,7 @@ class AppContainer internal constructor(
 
     val notificationWatcherTools: List<NavaTool> by lazy {
         com.nava.feature.automations.notification.NotificationWatcherTools.createAll(
-            watcherPort = notificationWatcherDao,
+            watcherPort = notificationWatcherPort,
             auditLog = auditLogDao,
             clockMs = clockMs
         )
@@ -1072,10 +1080,9 @@ class AppContainer internal constructor(
                 notificationWatcherEngine.onLiveNotificationIngested(captured)
             }
         )
-        // Warm in-memory watcher cache asynchronously while unlocked so lock-screen notifications
-        // never drop on Keystore setUnlockedDeviceRequired(true).
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            runCatching { notificationWatcherEngine.refreshCache() }
+        // Warm the lock-screen watcher snapshot while the store is readable.
+        appScope.launch {
+            notificationWatcherPort.warmUp()
         }
         appContext?.let { NotificationServiceBinding.requestRebindIfUnbound(it) }
         AutomationWorkerRegistry.bind(

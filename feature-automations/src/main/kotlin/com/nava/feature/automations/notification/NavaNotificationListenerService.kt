@@ -44,12 +44,35 @@ class NotificationIngestionFilter(
         postedAtEpochMs: Long,
         channelId: String? = null,
         lazyContentExtractor: () -> Pair<String, String>
-    ): Boolean = onPostedInternal(
+    ): Boolean = ingest(
         notificationKey = notificationKey,
         packageName = packageName,
         postedAtEpochMs = postedAtEpochMs,
         channelId = channelId,
         isLiveEvent = true,
+        lazySenderExtractor = null,
+        lazyContentExtractor = lazyContentExtractor
+    )
+
+    /**
+     * Like [onPosted], additionally capturing sender identity from structured notification
+     * metadata via [lazySenderExtractor] (invoked only for permitted packages).
+     */
+    suspend fun onPostedWithSender(
+        notificationKey: String,
+        packageName: String,
+        postedAtEpochMs: Long,
+        channelId: String?,
+        isLiveEvent: Boolean,
+        lazySenderExtractor: () -> String,
+        lazyContentExtractor: () -> Pair<String, String>
+    ): Boolean = ingest(
+        notificationKey = notificationKey,
+        packageName = packageName,
+        postedAtEpochMs = postedAtEpochMs,
+        channelId = channelId,
+        isLiveEvent = isLiveEvent,
+        lazySenderExtractor = lazySenderExtractor,
         lazyContentExtractor = lazyContentExtractor
     )
 
@@ -59,6 +82,24 @@ class NotificationIngestionFilter(
         postedAtEpochMs: Long,
         channelId: String? = null,
         isLiveEvent: Boolean = true,
+        lazyContentExtractor: () -> Pair<String, String>
+    ): Boolean = ingest(
+        notificationKey = notificationKey,
+        packageName = packageName,
+        postedAtEpochMs = postedAtEpochMs,
+        channelId = channelId,
+        isLiveEvent = isLiveEvent,
+        lazySenderExtractor = null,
+        lazyContentExtractor = lazyContentExtractor
+    )
+
+    private suspend fun ingest(
+        notificationKey: String,
+        packageName: String,
+        postedAtEpochMs: Long,
+        channelId: String?,
+        isLiveEvent: Boolean,
+        lazySenderExtractor: (() -> String)?,
         lazyContentExtractor: () -> Pair<String, String>
     ): Boolean {
         if (notificationKey.isBlank() || packageName.isBlank() || packageName == SELF_PACKAGE_NAME) {
@@ -92,13 +133,26 @@ class NotificationIngestionFilter(
             sourceLabel = packageName
         )
 
+        // Sender identities (names, email addresses, phone numbers) are destination-grade data:
+        // tag them RECIPIENT_ADDRESS so any use as a tool target forces explicit confirmation.
+        val senderHintsTainted = lazySenderExtractor?.invoke()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { rawSender ->
+                Gemma4InputSanitizer.sanitizeExternal(
+                    rawExternalInput = rawSender,
+                    slotKind = SensitiveSlotKind.RECIPIENT_ADDRESS,
+                    sourceLabel = packageName
+                )
+            }
+
         val captured = CapturedNotification(
             notificationKey = notificationKey,
             packageName = packageName,
             title = titleTainted,
             body = bodyTainted,
             postedAtEpochMs = postedAtEpochMs,
-            channelId = channelId
+            channelId = channelId,
+            senderHints = senderHintsTainted
         )
 
         inbox.ingest(captured)
@@ -241,11 +295,13 @@ class NavaNotificationListenerService : NotificationListenerService() {
         val activeFilter = NotificationServiceBinding.getFilter() ?: return // Fail-closed when unbound
 
         serviceScope.launch {
-            activeFilter.onPosted(
+            activeFilter.onPostedWithSender(
                 notificationKey = key,
                 packageName = pkg,
                 postedAtEpochMs = postTime,
                 channelId = channelId,
+                isLiveEvent = true,
+                lazySenderExtractor = { extractSenderHints(sbn) },
                 lazyContentExtractor = { extractNotificationContent(sbn) }
             )
         }
@@ -273,12 +329,13 @@ class NavaNotificationListenerService : NotificationListenerService() {
         for (sbn in active) {
             val key = sbn?.key ?: continue
             val pkg = sbn.packageName ?: continue
-            activeFilter.onPostedInternal(
+            activeFilter.onPostedWithSender(
                 notificationKey = key,
                 packageName = pkg,
                 postedAtEpochMs = sbn.postTime,
                 channelId = sbn.notification?.channelId,
                 isLiveEvent = false,
+                lazySenderExtractor = { extractSenderHints(sbn) },
                 lazyContentExtractor = { extractNotificationContent(sbn) }
             )
         }
@@ -297,8 +354,7 @@ class NavaNotificationListenerService : NotificationListenerService() {
             ?.joinToString(" | ")
         val summaryText = extras?.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()?.trim()
             ?: extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim()
-        val peopleInfo = extractPeopleInfo(extras)
-        val primaryText = when {
+        val text = when {
             !bigText.isNullOrBlank() && !plainText.isNullOrBlank() && !bigText.contains(plainText) ->
                 "$plainText - $bigText"
             !bigText.isNullOrBlank() -> bigText
@@ -307,19 +363,17 @@ class NavaNotificationListenerService : NotificationListenerService() {
             !summaryText.isNullOrBlank() -> summaryText
             else -> ""
         }
-        val text = if (peopleInfo.isNotBlank() && !title.contains(peopleInfo, ignoreCase = true) &&
-            !primaryText.contains(peopleInfo, ignoreCase = true)
-        ) {
-            if (primaryText.isBlank()) peopleInfo else "$primaryText ($peopleInfo)"
-        } else {
-            primaryText
-        }
         return title to text
     }
 
+    /**
+     * Sender identity from structured metadata only (`EXTRA_PEOPLE_LIST`), never from free text.
+     * Keeps display names plus `mailto:`/`tel:` addresses; other URIs (e.g. `content://` contact
+     * lookups) are dropped. Bounded to [MAX_SENDER_PEOPLE] people and [MAX_SENDER_HINT_CHARS].
+     */
     @Suppress("DEPRECATION")
-    private fun extractPeopleInfo(extras: android.os.Bundle?): String {
-        if (extras == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return ""
+    private fun extractSenderHints(sbn: StatusBarNotification): String {
+        val extras = sbn.notification?.extras ?: return ""
         val people = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 extras.getParcelableArrayList(Notification.EXTRA_PEOPLE_LIST, android.app.Person::class.java)
@@ -328,12 +382,28 @@ class NavaNotificationListenerService : NotificationListenerService() {
             }
         }.getOrNull().orEmpty()
         if (people.isEmpty()) return ""
-        return people.mapNotNull { person ->
-            val parts = listOfNotNull(
-                person.name?.toString()?.trim()?.takeIf { it.isNotEmpty() },
-                person.uri?.removePrefix("mailto:")?.trim()?.takeIf { it.isNotEmpty() }
-            )
-            parts.joinToString(" ").takeIf { it.isNotEmpty() }
-        }.distinct().joinToString(", ")
+        return people.asSequence()
+            .mapNotNull { person ->
+                val name = person.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                val address = person.uri?.trim()?.let { uri ->
+                    when {
+                        uri.startsWith(MAILTO_PREFIX, ignoreCase = true) -> uri.substring(MAILTO_PREFIX.length)
+                        uri.startsWith(TEL_PREFIX, ignoreCase = true) -> uri.substring(TEL_PREFIX.length)
+                        else -> null
+                    }
+                }?.trim()?.takeIf { it.isNotEmpty() }
+                listOfNotNull(name, address).joinToString(" ").takeIf { it.isNotEmpty() }
+            }
+            .distinct()
+            .take(MAX_SENDER_PEOPLE)
+            .joinToString(", ")
+            .take(MAX_SENDER_HINT_CHARS)
+    }
+
+    private companion object {
+        const val MAILTO_PREFIX: String = "mailto:"
+        const val TEL_PREFIX: String = "tel:"
+        const val MAX_SENDER_PEOPLE: Int = 3
+        const val MAX_SENDER_HINT_CHARS: Int = 160
     }
 }

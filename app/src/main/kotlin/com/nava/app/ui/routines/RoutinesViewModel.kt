@@ -118,9 +118,8 @@ class RoutinesViewModel(
             val globalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused()
             val activeReminders = container.scheduledReminderDao.listActiveReminders()
             val briefingConfig = container.morningBriefingPreferencesStore.currentConfig()
-            val watchers = runCatching { container.notificationWatcherDao.listWatchers() }
+            val watchers = runCatching { container.notificationWatcherPort.listWatchers() }
                 .getOrDefault(emptyList())
-            runCatching { container.notificationWatcherEngine.refreshCache() }
 
             _uiState.update { state ->
                 state.copy(
@@ -177,21 +176,21 @@ class RoutinesViewModel(
                 enabled = true,
                 createdAtEpochMs = now
             )
-            container.notificationWatcherDao.saveWatcher(watcher)
+            container.notificationWatcherPort.saveWatcher(watcher)
             refreshRules()
         }
     }
 
     fun setNotificationWatcherEnabled(watcherId: String, enabled: Boolean) {
         vmScope.launch {
-            container.notificationWatcherDao.setWatcherEnabled(watcherId, enabled)
+            container.notificationWatcherPort.setWatcherEnabled(watcherId, enabled)
             refreshRules()
         }
     }
 
     fun deleteNotificationWatcher(watcherId: String) {
         vmScope.launch {
-            container.notificationWatcherDao.deleteWatcher(watcherId)
+            container.notificationWatcherPort.deleteWatcher(watcherId)
             refreshRules()
         }
     }

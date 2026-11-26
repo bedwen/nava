@@ -29,6 +29,7 @@ import java.text.Normalizer
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 
 /**
  * Pure Kotlin zero-battery notification watcher matcher.
@@ -40,6 +41,10 @@ import java.util.concurrent.ConcurrentHashMap
  *   it never invokes tools, sends messages, or mutates device data.
  */
 object NotificationWatcherMatcher {
+    private const val MIN_EMAIL_TOKEN_CHARS: Int = 3
+    private const val MIN_JOINED_TERM_CHARS: Int = 5
+    private const val MAX_JOINED_WORDS: Int = 3
+
     private val DIACRITICS_REGEX = Regex("\\p{InCombiningDiacriticalMarks}+")
 
     private val APP_ALIAS_PREFIXES: Map<String, Set<String>> = mapOf(
@@ -79,19 +84,18 @@ object NotificationWatcherMatcher {
 
         val foldedTitle = fold(notification.title.value)
         val foldedBody = fold(notification.body.value)
-        val combined = "$foldedTitle $foldedBody"
-        val combinedNoSpaces = combined.replace(" ", "")
+        val foldedSender = notification.senderHints?.let { fold(it.value) }.orEmpty()
 
+        // Sender filters only look at sender identity (title + structured sender metadata), never
+        // at the body: anyone can type a name into a message body to spoof a watched sender.
         val sender = watcher.senderFilter?.trim()?.takeIf { it.isNotEmpty() }
-        if (sender != null && !matchesTerm(sender, combined, combinedNoSpaces)) {
+        if (sender != null && !matchesTerm(sender, MatchText.of("$foldedTitle $foldedSender"))) {
             return false
         }
 
         if (watcher.keywords.isNotEmpty()) {
-            val anyKeywordMatched = watcher.keywords.any { kw ->
-                matchesTerm(kw, combined, combinedNoSpaces)
-            }
-            if (!anyKeywordMatched) {
+            val content = MatchText.of("$foldedTitle $foldedBody $foldedSender")
+            if (watcher.keywords.none { kw -> matchesTerm(kw, content) }) {
                 return false
             }
         }
@@ -99,36 +103,64 @@ object NotificationWatcherMatcher {
         return true
     }
 
+    /** Folded haystack with precomputed word list for boundary-aware matching. */
+    private class MatchText private constructor(val text: String, val words: List<String>) {
+        val noSpaces: String = words.joinToString("")
+        val wordSet: Set<String> = words.toHashSet()
+
+        companion object {
+            private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
+
+            fun of(folded: String): MatchText =
+                MatchText(folded, folded.split(NON_WORD).filter { it.isNotEmpty() })
+        }
+    }
+
     /**
-     * Matches a single user-provided term (keyword, sender name, or email address) against the
-     * folded notification text.
+     * Matches one user-provided term (keyword, sender name, or email address).
      *
-     * Gmail and many email clients display only the sender's display name (e.g. "Nezih Erbay" or
-     * "Halit Buluthan Cetintas") in Android notifications rather than the raw email address.
-     * When [rawTerm] is an email address (`local@domain`), this method matches either the full
-     * address OR all meaningful tokens of the local part against both spaced and whitespace-stripped
-     * notification text.
+     * - Plain terms keep substring semantics against the folded text.
+     * - Multi-word terms also match when the words are written together ("Nezih Erbay" vs
+     *   "NezihErbay"); single-word terms never match across word boundaries.
+     * - Email addresses match the full address, or - because Gmail and similar clients show only
+     *   the sender's display name - when every local-part token (split on `.` `_` `-` `+`, trailing
+     *   digits removed, at least 3 chars) equals a whole word, or a run of up to 3 consecutive
+     *   words ("firstsecond" vs "First Second"). Short tokens such as "ed" never match inside
+     *   other words.
      */
-    private fun matchesTerm(rawTerm: String, combined: String, combinedNoSpaces: String): Boolean {
+    private fun matchesTerm(rawTerm: String, haystack: MatchText): Boolean {
         val foldedTerm = fold(rawTerm)
         if (foldedTerm.isEmpty()) return false
-        if (combined.contains(foldedTerm)) return true
-
-        val termNoSpaces = foldedTerm.replace(" ", "")
-        if (termNoSpaces.length >= 3 && combinedNoSpaces.contains(termNoSpaces)) return true
+        if (haystack.text.contains(foldedTerm)) return true
 
         val atIndex = foldedTerm.indexOf('@')
         if (atIndex > 0) {
-            val localPart = foldedTerm.substring(0, atIndex)
-            val tokens = localPart
+            val tokens = foldedTerm.substring(0, atIndex)
                 .split('.', '_', '-', '+')
-                .map { it.trim() }
-                .filter { it.length >= 2 }
-            if (tokens.isNotEmpty() && tokens.all { token ->
-                    combined.contains(token) || combinedNoSpaces.contains(token)
-                }
-            ) {
+                .map { it.trim().trimEnd { ch -> ch.isDigit() } }
+                .filter { it.length >= MIN_EMAIL_TOKEN_CHARS }
+            return tokens.isNotEmpty() && tokens.all { token -> matchesWholeWords(token, haystack) }
+        }
+
+        if (foldedTerm.contains(' ')) {
+            val termNoSpaces = foldedTerm.replace(" ", "")
+            if (termNoSpaces.length >= MIN_JOINED_TERM_CHARS && haystack.noSpaces.contains(termNoSpaces)) {
                 return true
+            }
+        }
+        return false
+    }
+
+    private fun matchesWholeWords(token: String, haystack: MatchText): Boolean {
+        if (token in haystack.wordSet) return true
+        val words = haystack.words
+        for (start in words.indices) {
+            val joined = StringBuilder(words[start])
+            var end = start + 1
+            while (end < words.size && end - start < MAX_JOINED_WORDS && joined.length < token.length) {
+                joined.append(words[end])
+                if (joined.length == token.length && joined.toString() == token) return true
+                end++
             }
         }
         return false
@@ -164,26 +196,17 @@ class NotificationWatcherEngine(
 ) {
     private val recentAlertTimestamps = ConcurrentHashMap<String, Long>()
 
-    @Volatile
-    private var cachedEnabledWatchers: List<NotificationWatcher> = emptyList()
-
     /**
-     * Refreshes the in-memory enabled watcher snapshot from [watcherPort] while the device is
-     * unlocked so lock-screen notifications can still be evaluated without failing on Keystore
-     * `setUnlockedDeviceRequired(true)`.
+     * Evaluates a freshly ingested notification against enabled watchers. Lock-screen support
+     * comes from wiring a [CachingNotificationWatcherPort] as [watcherPort].
      */
-    suspend fun refreshCache() {
-        val loaded = runCatching { watcherPort.listEnabledWatchers() }.getOrNull() ?: return
-        cachedEnabledWatchers = loaded
-    }
-
     suspend fun onLiveNotificationIngested(notification: CapturedNotification) {
-        val fresh = runCatching { watcherPort.listEnabledWatchers() }.getOrNull()
-        val enabledWatchers = if (fresh != null) {
-            cachedEnabledWatchers = fresh
-            fresh
-        } else {
-            cachedEnabledWatchers
+        val enabledWatchers = try {
+            watcherPort.listEnabledWatchers()
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            emptyList()
         }
         if (enabledWatchers.isEmpty()) return
 

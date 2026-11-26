@@ -311,14 +311,15 @@ class NotificationWatcherTest {
             }
         }
         var alertCount = 0
+        val cachingPort = CachingNotificationWatcherPort(lockablePort)
         val engine = NotificationWatcherEngine(
-            watcherPort = lockablePort,
+            watcherPort = cachingPort,
             alertPort = NotificationWatcherAlertPort { _, _, _, _ -> alertCount++ },
             clockMs = { 90_000L }
         )
 
         // Warm cache while unlocked
-        engine.refreshCache()
+        cachingPort.warmUp()
 
         // Simulate device locked when email arrives
         locked = true
@@ -331,5 +332,118 @@ class NotificationWatcherTest {
         )
         engine.onLiveNotificationIngested(notif)
         assertEquals(1, alertCount)
+    }
+
+    private fun gmail(title: String, body: String, sender: String? = null, key: String = "gm_x") =
+        CapturedNotification(
+            notificationKey = key,
+            packageName = "com.google.android.gm",
+            title = extText(title, "com.google.android.gm"),
+            body = extText(body, "com.google.android.gm"),
+            postedAtEpochMs = 5_000L,
+            senderHints = sender?.let { extText(it, "com.google.android.gm") }
+        )
+
+    private fun senderWatcher(sender: String, keywords: List<String> = emptyList()) = NotificationWatcher(
+        watcherId = "w_${sender.hashCode()}",
+        label = "Sender",
+        keywords = keywords,
+        senderFilter = sender,
+        enabled = true
+    )
+
+    @Test
+    fun senderFilterIgnoresNamesWrittenInTheBody() {
+        val watcher = senderWatcher("Nezih Erbay")
+        assertFalse(
+            "a stranger typing the watched name into the body must not match",
+            NotificationWatcherMatcher.matches(watcher, gmail("Spam Sender", "Hi, I am Nezih Erbay, wire money"))
+        )
+        assertTrue(NotificationWatcherMatcher.matches(watcher, gmail("Nezih Erbay", "Lunch?")))
+        assertTrue(
+            "structured sender metadata counts as sender identity",
+            NotificationWatcherMatcher.matches(watcher, gmail("Project group", "Update", sender = "Nezih Erbay"))
+        )
+    }
+
+    @Test
+    fun emailTokensMatchWholeWordsOnly() {
+        assertFalse(
+            "short local-part tokens must not match inside other words",
+            NotificationWatcherMatcher.matches(senderWatcher("ed@example.com"), gmail("Needed Reddy", "x"))
+        )
+        assertFalse(
+            "tokens must not match as a substring of a longer word",
+            NotificationWatcherMatcher.matches(senderWatcher("ali.can@example.com"), gmail("Alican Kalinin", "x"))
+        )
+        assertTrue(
+            "trailing digits in the local part are ignored",
+            NotificationWatcherMatcher.matches(senderWatcher("john.doe92@example.com"), gmail("John Doe", "x"))
+        )
+        assertTrue(
+            "full address in structured sender metadata matches",
+            NotificationWatcherMatcher.matches(
+                senderWatcher("nerbay@example.com"),
+                gmail("Nezih", "x", sender = "Nezih nerbay@example.com")
+            )
+        )
+    }
+
+    @Test
+    fun singleWordKeywordsNeverMatchAcrossWordBoundaries() {
+        val watcher = NotificationWatcher(
+            watcherId = "w_pay",
+            label = "Pay",
+            keywords = listOf("pay"),
+            enabled = true
+        )
+        assertFalse(NotificationWatcherMatcher.matches(watcher, gmail("Shop", "go to top ay now")))
+        assertTrue(NotificationWatcherMatcher.matches(watcher, gmail("Shop", "Payment due")))
+        val multi = watcher.copy(watcherId = "w_multi", keywords = listOf("nezih erbay"))
+        assertTrue(NotificationWatcherMatcher.matches(multi, gmail("NezihErbay", "x")))
+    }
+
+    @Test
+    fun cachingPortNeverServesWatchersDeletedOrDisabledBeforeLock() = runTest {
+        var locked = false
+        val inner = InMemoryWatcherPort()
+        val lockable = object : NotificationWatcherPort by inner {
+            override suspend fun listEnabledWatchers(): List<NotificationWatcher> {
+                if (locked) throw SecurityException("Device is locked")
+                return inner.listEnabledWatchers()
+            }
+        }
+        val port = CachingNotificationWatcherPort(lockable)
+        port.saveWatcher(NotificationWatcher(watcherId = "a", label = "A", keywords = listOf("invoice"), enabled = true))
+        port.saveWatcher(NotificationWatcher(watcherId = "b", label = "B", keywords = listOf("bill"), enabled = true))
+        port.deleteWatcher("a")
+        port.setWatcherEnabled("b", false)
+
+        locked = true
+        assertTrue(port.listEnabledWatchers().isEmpty())
+    }
+
+    @Test
+    fun cachingPortDropsSnapshotWhenPostMutationReadFails() = runTest {
+        var locked = false
+        val inner = InMemoryWatcherPort()
+        val lockable = object : NotificationWatcherPort by inner {
+            override suspend fun listEnabledWatchers(): List<NotificationWatcher> {
+                if (locked) throw SecurityException("Device is locked")
+                return inner.listEnabledWatchers()
+            }
+        }
+        val port = CachingNotificationWatcherPort(lockable)
+        port.saveWatcher(NotificationWatcher(watcherId = "a", label = "A", keywords = listOf("invoice"), enabled = true))
+        assertEquals(1, port.listEnabledWatchers().size)
+
+        locked = true
+        port.deleteWatcher("a") // succeeds in the store, but the snapshot cannot be re-read
+        try {
+            port.listEnabledWatchers()
+            org.junit.Assert.fail("a possibly stale snapshot must not be served")
+        } catch (_: SecurityException) {
+            // expected: fail closed
+        }
     }
 }
