@@ -3,6 +3,7 @@ package com.nava.core.security.storage
 import com.nava.core.security.crypto.AesGcmCryptoEngine
 import com.nava.core.security.crypto.CryptoKeyProvider
 import com.nava.core.security.crypto.HmacSha256Engine
+import com.nava.core.security.crypto.KeyUnavailability
 import com.nava.core.security.crypto.SecureMemory
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -194,6 +195,37 @@ class EncryptedSqliteStore(
             decryptRowsOrZeroize(validTable, storage.listRows(validTable))
         }
     }
+
+    /**
+     * Lists and decrypts all rows in [tableName], skipping rows whose ciphertext fails integrity
+     * checks (tampered or corrupted) so maintenance passes are not blocked by a single bad row.
+     * Key-level failures (device locked, permanent key loss) still propagate.
+     */
+    suspend fun listAllDecryptedSkippingCorrupt(tableName: String): List<DecryptedRow> =
+        withContext(dispatcher) {
+            val validTable = EncryptedTableSchema.validateTableName(tableName)
+            storeMutex.withLock {
+                val result = ArrayList<DecryptedRow>()
+                try {
+                    for (raw in storage.listRows(validTable)) {
+                        try {
+                            result.add(decryptRow(validTable, raw))
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            if (KeyUnavailability.isTransient(e) || KeyUnavailability.isPermanentKeyLoss(e)) {
+                                throw e
+                            }
+                            // Tampered, truncated, or otherwise corrupted row: skipped.
+                        }
+                    }
+                    result
+                } catch (e: Throwable) {
+                    for (decrypted in result) decrypted.zeroize()
+                    throw e
+                }
+            }
+        }
 
     /** Lists and decrypts up to [limit] most recently updated rows in [tableName]. */
     suspend fun listRecentDecrypted(

@@ -397,11 +397,6 @@ class LockedDeviceFallbackGate2RedTeamTest {
     }
 
     @Test
-    @Ignore(
-        "GATE2-DEFECT (pre-existing, tracked as follow-up, not addressed on this branch): same-row " +
-            "ciphertext rollback (AAD binds only table:rowId:column, upsert reuses rowId, seal excludes " +
-            "approvalState) revives a REVOKED rule as APPROVED_ACTIVE with a valid seal"
-    )
     fun sameRowCiphertextRollback_mustNotReviveRevokedRule() = runBlocking {
         val f = fixture()
         val rules = newRules(f)

@@ -19,7 +19,7 @@ import javax.crypto.SecretKeyFactory
  * Every key attempts hardware StrongBox provisioning first and falls back cleanly to TEE
  * when StrongBox is unavailable or unsupported for the requested algorithm/constraints.
  */
-class AndroidKeystoreKeyProvider : CryptoKeyProvider {
+class AndroidKeystoreKeyProvider : CryptoKeyProvider, RuleSealKeyStore {
     private val keyLock = Any()
 
     override fun getOrCreateDbMasterKey(): SecretKey {
@@ -98,6 +98,61 @@ class AndroidKeystoreKeyProvider : CryptoKeyProvider {
                 .setIsStrongBoxBacked(strongBox)
                 .build()
         }
+    }
+
+    override fun createFreshSealKey(alias: String): SecretKey {
+        require(alias.startsWith(RULE_SEAL_ALIAS_PREFIX)) { "Unexpected rule seal key alias" }
+        return synchronized(keyLock) {
+            deleteAliasQuietly(loadKeyStore(), alias)
+            generateWithStrongBoxFallback(KeyProperties.KEY_ALGORITHM_HMAC_SHA256) { strongBox ->
+                buildRuleSealKeySpec(alias, strongBox)
+            }
+        }
+    }
+
+    override fun findSealKey(alias: String): SecretKey? {
+        if (!alias.startsWith(RULE_SEAL_ALIAS_PREFIX)) return null
+        return synchronized(keyLock) {
+            loadKeyStore().getKey(alias, null) as? SecretKey
+        }
+    }
+
+    override fun deleteSealKey(alias: String) {
+        require(alias.startsWith(RULE_SEAL_ALIAS_PREFIX)) { "Unexpected rule seal key alias" }
+        synchronized(keyLock) {
+            val keyStore = loadKeyStore()
+            if (keyStore.containsAlias(alias)) {
+                // Propagate failures: a seal key that survives a revoke would allow rollback.
+                keyStore.deleteEntry(alias)
+            }
+        }
+    }
+
+    override fun areLegacySealsRetired(): Boolean {
+        return synchronized(keyLock) {
+            loadKeyStore().containsAlias(LEGACY_SEALS_RETIRED_MARKER_ALIAS)
+        }
+    }
+
+    override fun retireLegacySeals() {
+        synchronized(keyLock) {
+            if (loadKeyStore().containsAlias(LEGACY_SEALS_RETIRED_MARKER_ALIAS)) return
+            generateWithStrongBoxFallback(KeyProperties.KEY_ALGORITHM_HMAC_SHA256) { strongBox ->
+                buildRuleSealKeySpec(LEGACY_SEALS_RETIRED_MARKER_ALIAS, strongBox)
+            }
+        }
+    }
+
+    /**
+     * Rule seal keys must verify while the device is locked (unattended routines), so they require
+     * neither user authentication nor an unlocked device; their protection is that they live in
+     * Keystore, outside the app's rollback-able database files.
+     */
+    private fun buildRuleSealKeySpec(alias: String, strongBox: Boolean): KeyGenParameterSpec {
+        return KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+            .setKeySize(HMAC_KEY_SIZE_BITS)
+            .setIsStrongBoxBacked(strongBox)
+            .build()
     }
 
     override fun isStrongBoxBacked(alias: String): Boolean {
@@ -214,5 +269,8 @@ class AndroidKeystoreKeyProvider : CryptoKeyProvider {
         private const val AES_KEY_SIZE_BITS = 256
         private const val HMAC_KEY_SIZE_BITS = 256
         private const val AUTH_VALIDITY_PER_USE_SECONDS = 0
+        private const val RULE_SEAL_ALIAS_PREFIX: String = RuleSealKeyStore.ALIAS_PREFIX
+        private const val LEGACY_SEALS_RETIRED_MARKER_ALIAS: String =
+            "nava_rule_seal_legacy_retired_v1"
     }
 }
