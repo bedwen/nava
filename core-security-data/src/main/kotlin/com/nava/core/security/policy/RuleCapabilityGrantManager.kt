@@ -45,6 +45,14 @@ class RuleCapabilityGrantManager(
     private val lastKnownGrantByRuleId = ConcurrentHashMap<String, RuleCapabilityGrant>()
     private val grantWriteVersion = AtomicLong(0L)
 
+    /**
+     * Writer-only record of the newest grant persisted by this process, updated under
+     * [ruleStateMutex] right after the database write. Readers never write it, so a stale copy
+     * that an in-flight reader briefly publishes to [lastKnownGrantByRuleId] can never shadow a
+     * completed revoke/pause for a locked-device read.
+     */
+    private val lastWrittenGrantByRuleId = ConcurrentHashMap<String, RuleCapabilityGrant>()
+
     /** Globally pauses or resumes all background automation rule execution. */
     fun setGlobalRulesPaused(paused: Boolean) {
         globalRulesPaused.set(paused)
@@ -138,26 +146,36 @@ class RuleCapabilityGrantManager(
 
     override suspend fun findRule(ruleId: String): RuleCapabilityGrant? {
         if (ruleId.isBlank() || NULL_CHAR in ruleId) return null
-        val versionAtStart = grantWriteVersion.get()
-        val found = try {
-            findRuleUnlocked(ruleId)
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            if (KeyUnavailability.isTransient(e)) {
-                lastKnownGrantByRuleId[ruleId]?.let { return it }
+        var attempt = 0
+        while (true) {
+            val versionAtStart = grantWriteVersion.get()
+            val found = try {
+                findRuleUnlocked(ruleId)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                if (KeyUnavailability.isTransient(e)) {
+                    (lastWrittenGrantByRuleId[ruleId] ?: lastKnownGrantByRuleId[ruleId])?.let { return it }
+                }
+                throw e
             }
-            throw e
-        }
-        // Never let a read that raced with a write (e.g. revoke) overwrite the newer cached grant.
-        if (grantWriteVersion.get() == versionAtStart) {
-            if (found != null) {
-                lastKnownGrantByRuleId[ruleId] = found
-            } else {
+            if (found == null) {
                 lastKnownGrantByRuleId.remove(ruleId)
+                return null
+            }
+            // Publish, then re-check: if any write (e.g. revokeRule) landed while this read was in
+            // flight, retract exactly the value we published and re-read the fresh state. Every
+            // interleaving therefore ends with the newest grant cached, or no entry (fail closed).
+            lastKnownGrantByRuleId.put(ruleId, found)
+            if (grantWriteVersion.get() == versionAtStart) {
+                return found
+            }
+            lastKnownGrantByRuleId.remove(ruleId, found)
+            attempt++
+            if (attempt >= MAX_CACHE_PUBLISH_ATTEMPTS) {
+                return found
             }
         }
-        return found
     }
 
     override suspend fun listRules(): List<RuleCapabilityGrant> {
@@ -223,6 +241,7 @@ class RuleCapabilityGrantManager(
                 schemaVersion = RULE_SCHEMA_VERSION
             )
         }
+        lastWrittenGrantByRuleId[grant.ruleId] = grant
         grantWriteVersion.incrementAndGet()
         lastKnownGrantByRuleId[grant.ruleId] = grant
     }
@@ -314,6 +333,7 @@ class RuleCapabilityGrantManager(
     }
 
     companion object {
+        private const val MAX_CACHE_PUBLISH_ATTEMPTS: Int = 3
         private const val DOMAIN_RULE: String = "rule"
         private const val SEAL_DOMAIN_TAG: String = "nava:rule_grant_seal:v1"
         private const val SEAL_FORMAT_VERSION: Int = 1

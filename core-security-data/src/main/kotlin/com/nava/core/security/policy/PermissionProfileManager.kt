@@ -47,6 +47,32 @@ class PermissionProfileManager(
     private val resolutionCacheVersion = AtomicLong(0L)
     private val warmedAtVersion = AtomicLong(-1L)
 
+    /**
+     * Writer-only records updated under [policyMutex] right after each database write. Readers
+     * never write them, so a stale copy that an in-flight reader briefly publishes to
+     * [lastKnownProfileByTarget] can never shadow a completed reassignment, profile edit, or
+     * profile deletion for a locked-device read. Deleted profiles map to Default-Deny.
+     */
+    private val lastWrittenBindingByTarget = ConcurrentHashMap<String, String>()
+    private val lastWrittenProfileById = ConcurrentHashMap<String, PermissionProfile>()
+
+    /**
+     * Locked-device fallback: newest writer-recorded binding wins over any reader-published copy,
+     * and the profile content is always replaced by the newest writer-recorded version of that id.
+     * Returns null (fail closed) when the decision cannot be reconstructed.
+     */
+    private fun lockedDeviceFallback(targetId: String): PermissionProfile? {
+        val writtenProfileId = lastWrittenBindingByTarget[targetId]
+        val base = if (writtenProfileId != null) {
+            builtInPresets[writtenProfileId]
+                ?: lastWrittenProfileById[writtenProfileId]
+                ?: lastKnownProfileByTarget[targetId]?.takeIf { it.id == writtenProfileId }
+        } else {
+            lastKnownProfileByTarget[targetId]
+        } ?: return null
+        return lastWrittenProfileById[base.id] ?: base
+    }
+
     private val builtInPresets: Map<String, PermissionProfile> = linkedMapOf(
         PermissionProfile.DEFAULT_DENY_PROFILE_ID to PermissionProfile.defaultDeny(),
         PermissionProfile.NOTIFICATION_SUMMARY_PROFILE_ID to PermissionProfile.notificationSummaryOnly(),
@@ -59,22 +85,33 @@ class PermissionProfileManager(
         if (targetId.isBlank() || NULL_CHAR in targetId) {
             return PermissionProfile.defaultDeny()
         }
-        val versionAtStart = resolutionCacheVersion.get()
-        val resolved = try {
-            resolveProfileFromStore(targetId)
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            if (KeyUnavailability.isTransient(e)) {
-                lastKnownProfileByTarget[targetId]?.let { return it }
+        var attempt = 0
+        while (true) {
+            val versionAtStart = resolutionCacheVersion.get()
+            val resolved = try {
+                resolveProfileFromStore(targetId)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                if (KeyUnavailability.isTransient(e)) {
+                    lockedDeviceFallback(targetId)?.let { return it }
+                }
+                throw e
             }
-            throw e
+            // Publish, then re-check: if a mutation landed while this read was in flight, retract
+            // exactly the value we published and re-read. Every interleaving ends with the newest
+            // decision cached, or no entry (fail closed) - never a stale ALLOW.
+            lastKnownProfileByTarget.put(targetId, resolved)
+            if (resolutionCacheVersion.get() == versionAtStart) {
+                warmResolutionCacheIfCold(versionAtStart)
+                return resolved
+            }
+            lastKnownProfileByTarget.remove(targetId, resolved)
+            attempt++
+            if (attempt >= MAX_CACHE_PUBLISH_ATTEMPTS) {
+                return resolved
+            }
         }
-        if (resolutionCacheVersion.get() == versionAtStart) {
-            lastKnownProfileByTarget[targetId] = resolved
-            warmResolutionCacheIfCold(versionAtStart)
-        }
-        return resolved
     }
 
     /**
@@ -96,9 +133,13 @@ class PermissionProfileManager(
         } catch (_: Exception) {
             return
         }
+        lastKnownProfileByTarget.putAll(snapshot)
         if (resolutionCacheVersion.get() == version) {
-            lastKnownProfileByTarget.putAll(snapshot)
             warmedAtVersion.set(version)
+        } else {
+            for ((target, profile) in snapshot) {
+                lastKnownProfileByTarget.remove(target, profile)
+            }
         }
     }
 
@@ -185,6 +226,7 @@ class PermissionProfileManager(
                     schemaVersion = PROFILE_SCHEMA_VERSION
                 )
             }
+            lastWrittenProfileById[persistedProfile.id] = persistedProfile
             invalidateResolutionCache()
         }
     }
@@ -217,6 +259,10 @@ class PermissionProfileManager(
                     schemaVersion = BINDING_SCHEMA_VERSION
                 )
             }
+            lastWrittenBindingByTarget[targetId] = targetProfile.id
+            if (targetProfile.id !in PermissionProfile.IMMUTABLE_PRESET_IDS) {
+                lastWrittenProfileById[targetProfile.id] = targetProfile
+            }
             invalidateResolutionCache()
         }
     }
@@ -235,6 +281,14 @@ class PermissionProfileManager(
                 lookupHmac = profileHmac
             )
             // Invalidate immediately: a cached binding must never outlive its deleted profile.
+            lastWrittenProfileById[profileId] = PermissionProfile.defaultDeny()
+            // Bindings to the deleted profile are removed from the database below; mirror that so
+            // a later profile re-created under the same id can never inherit them while locked.
+            for (entry in lastWrittenBindingByTarget.entries) {
+                if (entry.value == profileId) {
+                    lastWrittenBindingByTarget.replace(entry.key, profileId, PermissionProfile.DEFAULT_DENY_PROFILE_ID)
+                }
+            }
             invalidateResolutionCache()
 
             val bindingRows = store.listAllDecrypted(EncryptedTableSchema.TABLE_PERMISSION_TARGET_BINDINGS)
@@ -383,6 +437,7 @@ class PermissionProfileManager(
     )
 
     companion object {
+        private const val MAX_CACHE_PUBLISH_ATTEMPTS: Int = 3
         private const val DOMAIN_PROFILE: String = "profile"
         private const val DOMAIN_TARGET: String = "target"
         private const val PROFILE_SCHEMA_VERSION: Int = 1

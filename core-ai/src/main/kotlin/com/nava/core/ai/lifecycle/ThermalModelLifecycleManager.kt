@@ -217,7 +217,9 @@ class ThermalModelLifecycleManager(
      *
      * [minimumIdleTimeoutSec] lets bursty callers (e.g. embedding a batch of tool descriptions)
      * keep weights resident for a short grace window instead of reloading them on every call.
-     * It never delays the immediate unload required under `SEVERE_OR_HIGHER` thermal state.
+     * It applies ONLY when the effective idle timeout is positive: it never delays the immediate
+     * unload PLAN.md Section 2.3 requires on Tier 0, under MODERATE thermal state, battery < 15%,
+     * or `SEVERE_OR_HIGHER`.
      */
     suspend fun onTurnCompleted(
         slot: ModelSlot = ModelSlot.PRIMARY_LLM,
@@ -229,7 +231,12 @@ class ThermalModelLifecycleManager(
             val state = residency(slot)
             cancelIdleTimerLocked(state)
             val expectedGen = state.generation
-            val timeoutSec = maxOf(effectiveIdleUnloadTimeoutSec(), minimumIdleTimeoutSec)
+            val effectiveTimeoutSec = effectiveIdleUnloadTimeoutSec()
+            val timeoutSec = if (effectiveTimeoutSec > 0) {
+                maxOf(effectiveTimeoutSec, minimumIdleTimeoutSec)
+            } else {
+                0
+            }
             if (timeoutSec <= 0 || currentThermalState() == ThermalState.SEVERE_OR_HIGHER) {
                 state.modelLoaded = false
                 state.generation++

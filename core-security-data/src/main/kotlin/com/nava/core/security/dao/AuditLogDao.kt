@@ -30,6 +30,7 @@ class AuditLogDao(
     private val pendingEntries = ArrayDeque<AuditLogEntry>()
     private val pendingMutex = Mutex()
     private var droppedPendingEntries: Long = 0L
+    private var reportedDroppedEntries: Long = 0L
 
     /** Number of audit entries buffered while the master key was unavailable. */
     suspend fun pendingBufferedCount(): Int = pendingMutex.withLock { pendingEntries.size }
@@ -46,12 +47,17 @@ class AuditLogDao(
                     } catch (ce: CancellationException) {
                         throw ce
                     } catch (e: Exception) {
-                        if (KeyUnavailability.isTransient(e)) throw e
+                        // Key-level failures keep the buffer intact: transient ones are retried
+                        // later, permanent key loss is surfaced to the caller below.
+                        if (KeyUnavailability.isTransient(e) || KeyUnavailability.isPermanentKeyLoss(e)) {
+                            throw e
+                        }
                         // A permanently unpersistable buffered entry must not wedge the log.
                         droppedPendingEntries++
                     }
                     pendingEntries.removeFirst()
                 }
+                persistGapMarkerIfNeeded(entry.timestampEpochMs)
                 persist(entry)
             } catch (ce: CancellationException) {
                 throw ce
@@ -66,6 +72,27 @@ class AuditLogDao(
                 pendingEntries.addLast(entry)
             }
         }
+    }
+
+    /**
+     * Makes buffer losses visible in the durable trail: whenever entries were dropped (overflow or
+     * an unpersistable record) since the last marker, writes one `AUDIT_BUFFER_GAP` entry before
+     * the next real entry. Must be called while holding [pendingMutex].
+     */
+    private suspend fun persistGapMarkerIfNeeded(nowEpochMs: Long) {
+        val unreported = droppedPendingEntries - reportedDroppedEntries
+        if (unreported <= 0L) return
+        persist(
+            AuditLogEntry(
+                timestampEpochMs = nowEpochMs,
+                toolName = AUDIT_GAP_TOOL_NAME,
+                targetId = AUDIT_GAP_TOOL_NAME,
+                actionSummary = "Audit buffer dropped $unreported entries while the master key was unavailable",
+                provenance = DataProvenance.SYSTEM,
+                decision = DECISION_AUDIT_BUFFER_GAP
+            )
+        )
+        reportedDroppedEntries = droppedPendingEntries
     }
 
     private suspend fun persist(entry: AuditLogEntry) {
@@ -166,6 +193,8 @@ class AuditLogDao(
         private const val DOMAIN_AUDIT_TARGET: String = "audit_target"
         private const val AUDIT_SCHEMA_VERSION: Int = 1
         private const val MAX_PENDING_ENTRIES: Int = 256
+        const val AUDIT_GAP_TOOL_NAME: String = "audit_log"
+        const val DECISION_AUDIT_BUFFER_GAP: String = "AUDIT_BUFFER_GAP"
         private val NEWEST_FIRST_COMPARATOR: Comparator<AuditLogEntry> =
             compareByDescending<AuditLogEntry> { it.timestampEpochMs }.thenByDescending { it.id }
     }

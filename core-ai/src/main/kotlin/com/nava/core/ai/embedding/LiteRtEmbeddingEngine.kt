@@ -224,8 +224,9 @@ class LiteRtEmbeddingEngine(
     }
 
     /**
-     * Arms the per-slot idle unload timer (or unloads immediately on Tier 0 / non-normal thermal
-     * state). Must be called while holding [embeddingMutex]; the deferred unloader re-acquires
+     * Arms the per-slot idle unload timer, or unloads immediately on Tier 0, MODERATE thermal
+     * state, battery < 15%, or SEVERE (the burst grace applies only under normal conditions).
+     * Must be called while holding [embeddingMutex]; the deferred unloader re-acquires
      * [embeddingMutex] before the lifecycle mutex, preserving the
      * `embeddingMutex -> lifecycleManager.mutex` lock ordering.
      */

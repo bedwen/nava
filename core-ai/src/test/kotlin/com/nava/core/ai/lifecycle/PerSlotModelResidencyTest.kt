@@ -65,26 +65,40 @@ class PerSlotModelResidencyTest {
     }
 
     @Test
-    fun minimumIdleTimeoutKeepsBurstCallersResidentOnTier0() = runTest {
+    fun minimumIdleTimeoutNeverOverridesTier0ImmediateUnload() = runTest {
         val tier0 = FakeHardwareStatusProvider(
             DeviceHardwareSnapshot(4L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 80)
         )
         val manager = ThermalModelLifecycleManager(tier0, backgroundScope)
         var immediate = 0
-        var deferred = 0
 
         manager.onEnsureLoaded(ModelSlot.EMBEDDING_ENGINE) { }
         manager.onTurnCompleted(
             slot = ModelSlot.EMBEDDING_ENGINE,
             immediateUnloader = { immediate++ },
+            deferredIdleUnloader = { },
+            minimumIdleTimeoutSec = 15
+        )
+        assertEquals("PLAN 2.3: Tier 0 unloads immediately", 1, immediate)
+        assertFalse(manager.hasPendingIdleUnload(ModelSlot.EMBEDDING_ENGINE))
+    }
+
+    @Test
+    fun minimumIdleTimeoutExtendsShortTimeoutsUnderNormalConditions() = runTest {
+        val manager = ThermalModelLifecycleManager(normalTier1Provider(), backgroundScope)
+        var deferred = 0
+
+        manager.onEnsureLoaded(ModelSlot.EMBEDDING_ENGINE) { }
+        manager.onTurnCompleted(
+            slot = ModelSlot.EMBEDDING_ENGINE,
+            immediateUnloader = { },
             deferredIdleUnloader = { gen ->
                 if (manager.consumePendingIdleUnload(ModelSlot.EMBEDDING_ENGINE, gen)) deferred++
             },
             minimumIdleTimeoutSec = 15
         )
-        assertEquals(0, immediate)
-
-        advanceTimeBy(16_000L)
+        assertTrue(manager.hasPendingIdleUnload(ModelSlot.EMBEDDING_ENGINE))
+        advanceTimeBy(181_000L)
         runCurrent()
         assertEquals(1, deferred)
     }

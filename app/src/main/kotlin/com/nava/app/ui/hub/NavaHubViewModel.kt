@@ -1882,6 +1882,9 @@ class NavaHubViewModel(
     ) {
         val locale = container.appLocaleManager.currentLocale()
         val (title, body) = container.messageRenderer.render(message, locale)
+        // Free-text args (e.g. tool failure details) may carry external data; keep such bodies
+        // out of Stage 1 history. Never downgrade an entry already marked untrusted.
+        val bannerCarriesFreeText = message.args.any { it is com.nava.domain.ui.MessageArg.Text }
         _uiState.update { state ->
             val updatedActionHistory = if (requestId != null) {
                 updateHistoryEntry(
@@ -1894,7 +1897,12 @@ class NavaHubViewModel(
                         messageKey = message.key,
                         isError = isError,
                         deniedTargetId = deniedTargetId ?: entry.deniedTargetId,
-                        deniedNeuron = deniedNeuron ?: entry.deniedNeuron
+                        deniedNeuron = deniedNeuron ?: entry.deniedNeuron,
+                        bodyProvenance = if (bannerCarriesFreeText) {
+                            DataProvenance.UNTRUSTED_EXTERNAL
+                        } else {
+                            entry.bodyProvenance
+                        }
                     )
                 }
             } else {
@@ -1909,7 +1917,12 @@ class NavaHubViewModel(
                         title = title,
                         body = body,
                         messageKey = message.key,
-                        isError = isError
+                        isError = isError,
+                        bodyProvenance = if (bannerCarriesFreeText) {
+                            DataProvenance.UNTRUSTED_EXTERNAL
+                        } else {
+                            entry.bodyProvenance
+                        }
                     )
                 }
             } else {
