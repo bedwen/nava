@@ -1,5 +1,6 @@
 package com.nava.core.ai.parser
 
+import com.nava.core.ai.prompt.FunctionGemmaPromptFormat
 import com.nava.core.ai.prompt.Gemma4PromptFormat
 import com.nava.domain.ai.MicroDslAst
 import com.nava.domain.ai.PlanAst
@@ -160,7 +161,21 @@ class MicroDslParser {
         return text.contains(Gemma4PromptFormat.TOOL_CALL_OPEN) ||
             text.contains(Gemma4PromptFormat.TOOL_CALL_CLOSE) ||
             text.contains(PARTIAL_TOOL_CALL_MARKER) ||
+            text.contains(FunctionGemmaPromptFormat.FUNCTION_CALL_OPEN) ||
+            text.contains(FunctionGemmaPromptFormat.FUNCTION_CALL_CLOSE) ||
+            text.contains(PARTIAL_FUNCTION_CALL_OPEN) ||
+            text.contains(PARTIAL_FUNCTION_CALL_CLOSE) ||
             BARE_CALL_PREFIX_REGEX.containsMatchIn(text)
+    }
+
+    private fun containsAnyNestedCallMarker(body: String): Boolean {
+        return body.contains(Gemma4PromptFormat.TOOL_CALL_OPEN) ||
+            body.contains(Gemma4PromptFormat.TOOL_CALL_CLOSE) ||
+            body.contains(PARTIAL_TOOL_CALL_MARKER) ||
+            body.contains(FunctionGemmaPromptFormat.FUNCTION_CALL_OPEN) ||
+            body.contains(FunctionGemmaPromptFormat.FUNCTION_CALL_CLOSE) ||
+            body.contains(PARTIAL_FUNCTION_CALL_OPEN) ||
+            body.contains(PARTIAL_FUNCTION_CALL_CLOSE)
     }
 
     private fun parseToolCallSequence(
@@ -177,29 +192,33 @@ class MicroDslParser {
             pos = skipWhitespace(working, pos)
             if (pos >= len) break
 
-            if (!working.startsWith(Gemma4PromptFormat.TOOL_CALL_OPEN, pos)) {
-                return MicroDslAst.ParseError(
+            val (openTag, closeTag) = when {
+                working.startsWith(Gemma4PromptFormat.TOOL_CALL_OPEN, pos) ->
+                    Gemma4PromptFormat.TOOL_CALL_OPEN to Gemma4PromptFormat.TOOL_CALL_CLOSE
+
+                working.startsWith(FunctionGemmaPromptFormat.FUNCTION_CALL_OPEN, pos) ->
+                    FunctionGemmaPromptFormat.FUNCTION_CALL_OPEN to FunctionGemmaPromptFormat.FUNCTION_CALL_CLOSE
+
+                else -> return MicroDslAst.ParseError(
                     rawFragment = working.substring(pos).take(ERROR_FRAGMENT_LIMIT),
-                    reason = "Malformed or unexpected content outside <|tool_call> block"
+                    reason = "Malformed or unexpected content outside tool call block"
                 )
             }
 
-            val contentStart = pos + Gemma4PromptFormat.TOOL_CALL_OPEN.length
-            val closeIdx = working.indexOf(Gemma4PromptFormat.TOOL_CALL_CLOSE, contentStart)
+            val contentStart = pos + openTag.length
+            val closeIdx = working.indexOf(closeTag, contentStart)
             if (closeIdx < 0) {
                 return MicroDslAst.ParseError(
                     rawFragment = working.substring(pos).take(ERROR_FRAGMENT_LIMIT),
-                    reason = "Unclosed <|tool_call> block"
+                    reason = "Unclosed $openTag block"
                 )
             }
 
             val blockBody = working.substring(contentStart, closeIdx)
-            if (blockBody.contains(Gemma4PromptFormat.TOOL_CALL_OPEN) ||
-                blockBody.contains(PARTIAL_TOOL_CALL_MARKER)
-            ) {
+            if (containsAnyNestedCallMarker(blockBody)) {
                 return MicroDslAst.ParseError(
                     rawFragment = blockBody.take(ERROR_FRAGMENT_LIMIT),
-                    reason = "Nested <|tool_call> block is forbidden"
+                    reason = "Nested tool call block is forbidden"
                 )
             }
 
@@ -221,7 +240,7 @@ class MicroDslParser {
             }
             calls.add(parsedCall.call!!)
 
-            pos = closeIdx + Gemma4PromptFormat.TOOL_CALL_CLOSE.length
+            pos = closeIdx + closeTag.length
         }
 
         if (calls.isEmpty()) {
@@ -268,20 +287,24 @@ class MicroDslParser {
         }
 
         reader.skipWhitespace()
-        if (!reader.consumeChar('{')) {
-            return SingleCallResult(
-                error = MicroDslAst.ParseError(
-                    rawFragment = blockBody.take(ERROR_FRAGMENT_LIMIT),
-                    reason = "Expected '{' after tool name '$toolName'"
+        val closeDelimiter: Char = when {
+            reader.consumeChar('{') -> '}'
+            reader.consumeChar('(') -> ')'
+            else -> {
+                return SingleCallResult(
+                    error = MicroDslAst.ParseError(
+                        rawFragment = blockBody.take(ERROR_FRAGMENT_LIMIT),
+                        reason = "Expected '{' after tool name '$toolName'"
+                    )
                 )
-            )
+            }
         }
 
         val toolMetadata = toolMetadataByName[toolName]
         val args = LinkedHashMap<String, Tainted<SlotValueAst>>()
         reader.skipWhitespace()
 
-        if (!reader.consumeChar('}')) {
+        if (!reader.consumeChar(closeDelimiter)) {
             while (true) {
                 reader.skipWhitespace()
                 val key = reader.readIdentifier()
@@ -340,7 +363,7 @@ class MicroDslParser {
                 when {
                     reader.consumeChar(',') -> {
                         reader.skipWhitespace()
-                        if (reader.peekOrNull() == '}') {
+                        if (reader.peekOrNull() == closeDelimiter) {
                             return SingleCallResult(
                                 error = MicroDslAst.ParseError(
                                     rawFragment = blockBody.take(ERROR_FRAGMENT_LIMIT),
@@ -350,7 +373,7 @@ class MicroDslParser {
                         }
                     }
 
-                    reader.consumeChar('}') -> break
+                    reader.consumeChar(closeDelimiter) -> break
                     else -> {
                         return SingleCallResult(
                             error = MicroDslAst.ParseError(
@@ -472,7 +495,10 @@ class MicroDslParser {
             }
 
             if (src.startsWith(Gemma4PromptFormat.STRING_QUOTE, pos)) {
-                return readGemmaQuotedString()
+                return readDelimitedString(Gemma4PromptFormat.STRING_QUOTE)
+            }
+            if (src.startsWith(FunctionGemmaPromptFormat.ESCAPE_TOKEN, pos)) {
+                return readDelimitedString(FunctionGemmaPromptFormat.ESCAPE_TOKEN)
             }
 
             return when (val ch = src[pos]) {
@@ -497,12 +523,12 @@ class MicroDslParser {
             }
         }
 
-        private fun readGemmaQuotedString(): ValueResult {
-            pos += Gemma4PromptFormat.STRING_QUOTE.length
+        private fun readDelimitedString(delimiter: String): ValueResult {
+            pos += delimiter.length
             val sb = StringBuilder()
             while (pos < len) {
-                if (src.startsWith(Gemma4PromptFormat.STRING_QUOTE, pos)) {
-                    pos += Gemma4PromptFormat.STRING_QUOTE.length
+                if (src.startsWith(delimiter, pos)) {
+                    pos += delimiter.length
                     return ValueResult(value = SlotValueAst.StringValue(sb.toString()))
                 }
                 val ch = src[pos++]
@@ -510,7 +536,7 @@ class MicroDslParser {
                     val escaped = readEscapeSequence() ?: return ValueResult(
                         error = MicroDslAst.ParseError(
                             rawFragment = remainingFragment(),
-                            reason = "Invalid escape sequence inside <|\"> string"
+                            reason = "Invalid escape sequence inside $delimiter string"
                         )
                     )
                     sb.append(escaped)
@@ -521,7 +547,7 @@ class MicroDslParser {
             return ValueResult(
                 error = MicroDslAst.ParseError(
                     rawFragment = src.take(ERROR_FRAGMENT_LIMIT),
-                    reason = "Unterminated Gemma string delimiter <|\">"
+                    reason = "Unterminated string delimiter $delimiter"
                 )
             )
         }
@@ -623,6 +649,25 @@ class MicroDslParser {
             while (pos < len && src[pos] in '0'..'9') {
                 pos++
             }
+            // Accept unquoted HH:MM time literals (e.g. time:12:34) emitted by small on-device models.
+            if (pos < len && src[pos] == ':' && src[start] != '-') {
+                val hourStr = src.substring(start, pos)
+                val hourInt = hourStr.toIntOrNull()
+                if (hourInt != null && hourInt in 0..23 && pos + 2 < len &&
+                    src[pos + 1] in '0'..'9' && src[pos + 2] in '0'..'9'
+                ) {
+                    val minStart = pos + 1
+                    val minEnd = pos + 3
+                    if (minEnd == len || isValueDelimiter(src[minEnd])) {
+                        val minInt = src.substring(minStart, minEnd).toIntOrNull()
+                        if (minInt != null && minInt in 0..59) {
+                            pos = minEnd
+                            val canonicalTime = "${hourInt.toString().padStart(2, '0')}:${minInt.toString().padStart(2, '0')}"
+                            return ValueResult(value = SlotValueAst.StringValue(canonicalTime))
+                        }
+                    }
+                }
+            }
             if (pos < len && !isValueDelimiter(src[pos])) {
                 return ValueResult(
                     error = MicroDslAst.ParseError(
@@ -691,6 +736,8 @@ class MicroDslParser {
 
         private const val ERROR_FRAGMENT_LIMIT: Int = 256
         private const val PARTIAL_TOOL_CALL_MARKER: String = "<|tool_call"
+        private const val PARTIAL_FUNCTION_CALL_OPEN: String = "<start_function_call"
+        private const val PARTIAL_FUNCTION_CALL_CLOSE: String = "<end_function_call"
         private const val PARTIAL_CHANNEL_MARKER: String = "<|channel"
         private val IDENTIFIER_REGEX: Regex = Regex("^[a-zA-Z_][a-zA-Z0-9_.-]*$")
         private val BARE_CALL_PREFIX_REGEX: Regex = Regex(

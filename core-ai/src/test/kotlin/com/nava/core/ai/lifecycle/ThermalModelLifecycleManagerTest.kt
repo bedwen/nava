@@ -30,7 +30,7 @@ class ThermalModelLifecycleManagerTest {
 
         provider.snapshot = DeviceHardwareSnapshot(6L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 80)
         assertEquals(RamTier.TIER_1_STANDARD, manager.currentRamTier())
-        assertEquals(2048, manager.effectiveContextTokens())
+        assertEquals(4096, manager.effectiveContextTokens())
         assertTrue(manager.isThoughtModeAllowed())
         assertEquals(180, manager.effectiveIdleUnloadTimeoutSec())
 

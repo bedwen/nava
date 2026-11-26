@@ -17,9 +17,11 @@ import java.util.Locale
 object NeuronToolMapper {
 
     private val toolToNeuron: Map<String, NeuronNodeId> = linkedMapOf(
-        // Clock
+        // Clock & Reminders
         AutomationToolNames.SET_ALARM to NeuronNodeId.CLOCK,
         AutomationToolNames.SET_TIMER to NeuronNodeId.CLOCK,
+        AutomationToolNames.SCHEDULE_REMINDER to NeuronNodeId.CLOCK,
+        AutomationToolNames.CANCEL_REMINDER to NeuronNodeId.CLOCK,
 
         // Calendar
         AutomationToolNames.CALENDAR_QUERY to NeuronNodeId.CALENDAR,
@@ -30,6 +32,7 @@ object NeuronToolMapper {
         AutomationToolNames.NOTES_READ to NeuronNodeId.NOTES,
         AutomationToolNames.NOTES_CREATE to NeuronNodeId.NOTES,
         AutomationToolNames.NOTES_DELETE to NeuronNodeId.NOTES,
+        AutomationToolNames.NOTES_SEARCH to NeuronNodeId.NOTES,
 
         // Nava Secure Vault
         AutomationToolNames.VAULT_READ to NeuronNodeId.VAULT,
@@ -41,6 +44,9 @@ object NeuronToolMapper {
         AutomationToolNames.DIAL_CALL to NeuronNodeId.MESSAGES,
         AutomationToolNames.PLACE_CALL to NeuronNodeId.MESSAGES,
         AutomationToolNames.SUMMARIZE_NOTIFICATIONS to NeuronNodeId.MESSAGES,
+        AutomationToolNames.CREATE_NOTIFICATION_WATCHER to NeuronNodeId.MESSAGES,
+        AutomationToolNames.MANAGE_NOTIFICATION_WATCHERS to NeuronNodeId.MESSAGES,
+        AutomationToolNames.DAILY_BRIEFING to NeuronNodeId.MESSAGES,
 
         // Device Audio / DND / App Launch
         AutomationToolNames.SET_DND to NeuronNodeId.AUDIO_DND,
@@ -50,11 +56,15 @@ object NeuronToolMapper {
         // Storage Access Framework (Files)
         AutomationToolNames.SAF_READ to NeuronNodeId.FILES,
         AutomationToolNames.SAF_WRITE to NeuronNodeId.FILES,
-        AutomationToolNames.SAF_DELETE to NeuronNodeId.FILES
+        AutomationToolNames.SAF_DELETE to NeuronNodeId.FILES,
+
+        // Routines
+        AutomationToolNames.PROPOSE_ROUTINE to NeuronNodeId.ROUTINES
     )
 
     private val targetToNeuron: Map<String, NeuronNodeId> = linkedMapOf(
         ToolTargetIds.CLOCK to NeuronNodeId.CLOCK,
+        ToolTargetIds.REMINDERS to NeuronNodeId.CLOCK,
         ToolTargetIds.CALENDAR to NeuronNodeId.CALENDAR,
         ToolTargetIds.NOTES to NeuronNodeId.NOTES,
         ToolTargetIds.VAULT to NeuronNodeId.VAULT,

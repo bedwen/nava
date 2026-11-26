@@ -1,6 +1,8 @@
 package com.nava.core.ai.engine
 
 import com.nava.core.ai.lifecycle.DeviceHardwareSnapshot
+import com.nava.core.ai.lifecycle.ModelSlot
+import com.nava.core.ai.lifecycle.MultiModelCoordinator
 import com.nava.core.ai.lifecycle.ThermalModelLifecycleManager
 import com.nava.core.ai.prompt.Gemma4PromptFormat
 import com.nava.core.ai.testing.CoreAiTestFixtures
@@ -463,5 +465,134 @@ class LiteRtLlmEngineTest {
 
         assertEquals(1, tier1UnloadCount())
         assertFalse(tier1Engine.isModelLoaded())
+    }
+
+    @Test
+    fun capsE2bContextTokensTo2048OnTier1AndTier2WhileKeeping4096ForNonE2bModels() = runTest {
+        val gb = 1024L * 1024L * 1024L
+        val hardware = FakeHardwareStatusProvider(
+            DeviceHardwareSnapshot(12L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 90)
+        )
+        val lifecycle = ThermalModelLifecycleManager(hardware, backgroundScope)
+        val runtime = FakeLiteRtRuntimeAdapter()
+        runtime.enqueueDeltas(listOf(RuntimeStreamDelta(outputDelta = "ok")))
+        runtime.enqueueDeltas(listOf(RuntimeStreamDelta(outputDelta = "ok")))
+
+        val e4bModelFile = File(tempDir, "gemma-4-E4B-it.litertlm").apply {
+            writeBytes(byteArrayOf(5, 6, 7, 8))
+        }
+        var activeModelPath = fakeModelFile.absolutePath
+        val engine = LiteRtLlmEngine(
+            modelPathProvider = { activeModelPath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = runtime
+        )
+
+        engine.generate(
+            LlmGenerationRequest(
+                requestId = "e2b-cap",
+                systemPrefixId = Gemma4PromptFormat.DEFAULT_STAGE1_SYSTEM_PREFIX_ID,
+                prunedTools = listOf(CoreAiTestFixtures.SET_ALARM_TOOL),
+                userUtterance = "Set alarm 07:00",
+                languageHintTag = "en"
+            )
+        )
+        assertEquals(2048, runtime.ensurePrefixCalls[0].maxNumTokens)
+
+        activeModelPath = e4bModelFile.absolutePath
+        engine.generate(
+            LlmGenerationRequest(
+                requestId = "e4b-cap",
+                systemPrefixId = Gemma4PromptFormat.DEFAULT_STAGE1_SYSTEM_PREFIX_ID,
+                prunedTools = listOf(CoreAiTestFixtures.SET_ALARM_TOOL),
+                userUtterance = "Set alarm 08:00",
+                languageHintTag = "en"
+            )
+        )
+        assertEquals(4096, runtime.ensurePrefixCalls[1].maxNumTokens)
+
+        assertEquals(2, AndroidLiteRtRuntimeAdapter.optimalCpuThreadCount(1))
+        assertEquals(4, AndroidLiteRtRuntimeAdapter.optimalCpuThreadCount(8))
+        assertEquals(4, AndroidLiteRtRuntimeAdapter.optimalCpuThreadCount(16))
+    }
+
+    @Test
+    fun clearsCoordinatorSlotOnMissingModelOrEnsurePrefixFailureAndCapsFunctionRouterTo1024() = runTest {
+        val gb = 1024L * 1024L * 1024L
+        val hardware = FakeHardwareStatusProvider(
+            DeviceHardwareSnapshot(4L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 90)
+        )
+        val lifecycle = ThermalModelLifecycleManager(hardware, backgroundScope)
+        val coordinator = MultiModelCoordinator(hardware)
+        var embedUnloads = 0
+        coordinator.registerUnloader(ModelSlot.EMBEDDING_ENGINE) { embedUnloads++ }
+
+        // 1. Missing model path -> FatalAbort / Aborted, slot remains inactive, peer not evicted
+        val missingRuntime = FakeLiteRtRuntimeAdapter()
+        val missingEngine = LiteRtLlmEngine(
+            modelPathProvider = { null },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = missingRuntime,
+            coordinator = coordinator,
+            modelSlot = ModelSlot.PRIMARY_LLM
+        )
+        val req = LlmGenerationRequest(
+            requestId = "r-missing",
+            systemPrefixId = Gemma4PromptFormat.DEFAULT_STAGE1_SYSTEM_PREFIX_ID,
+            prunedTools = listOf(CoreAiTestFixtures.SET_ALARM_TOOL),
+            userUtterance = "Set alarm 07:00",
+            languageHintTag = "en"
+        )
+        val abortChunks = missingEngine.generateStream(req).toList()
+        assertTrue(abortChunks.single() is LlmStreamChunk.Aborted)
+        assertFalse(coordinator.isSlotActive(ModelSlot.PRIMARY_LLM))
+        assertEquals(0, embedUnloads)
+
+        // 2. Runtime ensureMasterPrefix throws -> coordinator slot cleared (markUnloaded)
+        val failingRuntime = object : LiteRtRuntimeAdapter {
+            override fun isLoaded(): Boolean = false
+            override suspend fun ensureMasterPrefix(
+                modelPath: String,
+                systemPrefixId: String,
+                systemPrompt: String,
+                maxNumTokens: Int
+            ) {
+                throw IllegalStateException("Simulated native mmap failure")
+            }
+            override fun runClonedTurn(systemPrefixId: String, config: RuntimeTurnConfig): Flow<RuntimeStreamDelta> = flow {}
+            override suspend fun unload() {}
+        }
+        val failingEngine = LiteRtLlmEngine(
+            modelPathProvider = { fakeModelFile.absolutePath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = failingRuntime,
+            coordinator = coordinator,
+            modelSlot = ModelSlot.PRIMARY_LLM
+        )
+        try {
+            failingEngine.generate(req)
+            fail("Expected IllegalStateException when ensureMasterPrefix fails")
+        } catch (_: IllegalStateException) {
+            // Expected
+        }
+        assertFalse(coordinator.isSlotActive(ModelSlot.PRIMARY_LLM))
+        assertEquals(1, embedUnloads)
+
+        // 3. FUNCTION_ROUTER slot caps maxContextTokens at 1024 even on Tier 2
+        hardware.snapshot = DeviceHardwareSnapshot(12L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 90)
+        val fgRuntime = FakeLiteRtRuntimeAdapter()
+        fgRuntime.enqueueDeltas(listOf(RuntimeStreamDelta(outputDelta = "NO_FUNCTION_CALL")))
+        val fgModel = File(tempDir, "mobile-actions_q8_ekv1024.litertlm").apply {
+            writeBytes(byteArrayOf(9, 9, 9))
+        }
+        val fgEngine = LiteRtLlmEngine(
+            modelPathProvider = { fgModel.absolutePath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = fgRuntime,
+            coordinator = coordinator,
+            modelSlot = ModelSlot.FUNCTION_ROUTER
+        )
+        fgEngine.generate(req)
+        assertEquals(1024, fgRuntime.ensurePrefixCalls.single().maxNumTokens)
     }
 }

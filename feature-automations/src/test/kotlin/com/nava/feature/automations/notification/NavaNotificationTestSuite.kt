@@ -268,6 +268,42 @@ class NavaNotificationTestSuite {
         assertNull(NotificationServiceBinding.getFilter())
     }
 
+    @Test
+    fun activeNotificationSeedingSimulatesListenerConnectionWithPermittedAndDeniedApps() = runBlocking {
+        fakeEvaluator.setCapability("com.allowed.app", ConfirmationLevel.AUTO)
+        fakeEvaluator.setCapability("com.denied.app", ConfirmationLevel.DISABLED)
+        val filter = NotificationIngestionFilter(fakeEvaluator, inbox)
+
+        data class MockSbn(val key: String, val pkg: String, val postTime: Long, val title: String, val text: String)
+        val activeSbns = listOf(
+            MockSbn("active_1", "com.allowed.app", 1000L, "Active Alert", "Allowed content"),
+            MockSbn("active_2", "com.denied.app", 1001L, "Secret Alert", "Sensitive content"),
+            MockSbn("active_3", "com.unconfigured.app", 1002L, "Promo Alert", "Unknown content")
+        )
+
+        val extractorCallLog = mutableListOf<String>()
+        for (sbn in activeSbns) {
+            filter.onPosted(
+                notificationKey = sbn.key,
+                packageName = sbn.pkg,
+                postedAtEpochMs = sbn.postTime,
+                channelId = "default",
+                lazyContentExtractor = {
+                    extractorCallLog.add(sbn.pkg)
+                    sbn.title to sbn.text
+                }
+            )
+        }
+
+        // Only the permitted package triggers content extraction
+        assertEquals(listOf("com.allowed.app"), extractorCallLog)
+        assertEquals(1, inbox.size())
+        val ingested = inbox.listRecent().single()
+        assertEquals("active_1", ingested.notificationKey)
+        assertEquals("Active Alert", ingested.title.value)
+        assertEquals("Allowed content", ingested.body.value)
+    }
+
     // ==========================================
     // 4. NotificationSummaryTool Tests
     // ==========================================
@@ -340,6 +376,13 @@ class NavaNotificationTestSuite {
             isUnattendedBackground = true
         )
 
+        val resultNoPerms = tool.execute(context, emptyMap())
+        assertTrue(resultNoPerms is ToolResult.Success)
+        val noPermsSuccess = resultNoPerms as ToolResult.Success
+        assertEquals(MessageKey.INFO_NO_PERMITTED_NOTIFICATION_APPS, noPermsSuccess.message.key)
+        assertEquals("0", noPermsSuccess.outputValues["count"])
+
+        fakeEvaluator.setCapability("com.example.chat", ConfirmationLevel.AUTO)
         val result = tool.execute(context, emptyMap())
         assertTrue(result is ToolResult.Success)
         val success = result as ToolResult.Success
@@ -473,7 +516,11 @@ class FakePermissionEvaluator : PermissionEvaluatorPort {
         return PermissionProfile.defaultDeny()
     }
 
-    override suspend fun listProfiles(): List<PermissionProfile> = emptyList()
+    override suspend fun listProfiles(): List<PermissionProfile> {
+        val allowedTargets = capabilities.filterValues { it.isAllowed }.keys
+        if (allowedTargets.isEmpty()) return listOf(PermissionProfile.defaultDeny())
+        return listOf(PermissionProfile.notificationSummaryOnly().copy(assignedTargets = allowedTargets))
+    }
     override suspend fun saveProfile(profile: PermissionProfile) {}
     override suspend fun assignTargetToProfile(targetId: String, profileId: String) {}
     override suspend fun deleteProfile(profileId: String) {}

@@ -162,8 +162,11 @@ class AndroidCalendarPlatformGateway(
         if (!hasPermission(Manifest.permission.WRITE_CALENDAR)) {
             return CalendarGatewayResult.MissingPermission(Manifest.permission.WRITE_CALENDAR)
         }
+        if (draft.calendarId == null && !hasPermission(Manifest.permission.READ_CALENDAR)) {
+            return CalendarGatewayResult.MissingPermission(Manifest.permission.READ_CALENDAR)
+        }
         val resolvedCalendarId = draft.calendarId ?: resolvePrimaryCalendarId()
-            ?: return CalendarGatewayResult.Unavailable("No writable local calendar found")
+            ?: return CalendarGatewayResult.Unavailable("No writable calendar account found on device")
 
         val values = ContentValues().apply {
             put(CalendarContract.Events.CALENDAR_ID, resolvedCalendarId)
@@ -253,27 +256,59 @@ class AndroidCalendarPlatformGateway(
         if (!hasPermission(Manifest.permission.READ_CALENDAR)) return null
         val projection = arrayOf(
             CalendarContract.Calendars._ID,
-            CalendarContract.Calendars.IS_PRIMARY
+            CalendarContract.Calendars.IS_PRIMARY,
+            CalendarContract.Calendars.VISIBLE,
+            CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL
         )
-        val selection = "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL} >= ?"
-        val selectionArgs = arrayOf(CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR.toString())
-        return try {
-            var fallbackId: Long? = null
+        val preferred = try {
+            var primaryVisibleWritable: Long? = null
+            var visibleWritable: Long? = null
+            var anyWritable: Long? = null
             context.contentResolver.query(
                 CalendarContract.Calendars.CONTENT_URI,
                 projection,
-                selection,
-                selectionArgs,
+                null,
+                null,
                 null
             )?.use { cursor ->
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(0)
-                    val isPrimary = cursor.getInt(1) == 1
-                    if (isPrimary) return id
-                    if (fallbackId == null) fallbackId = id
+                    val isPrimary = !cursor.isNull(1) && cursor.getInt(1) == 1
+                    val isVisible = cursor.isNull(2) || cursor.getInt(2) == 1
+                    val accessLevel = if (cursor.isNull(3)) null else cursor.getInt(3)
+                    val isWritable = accessLevel == null ||
+                        accessLevel >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR
+                    if (!isWritable) continue
+
+                    if (isPrimary && isVisible) {
+                        primaryVisibleWritable = id
+                        break
+                    }
+                    if (isVisible && visibleWritable == null) {
+                        visibleWritable = id
+                    }
+                    if (anyWritable == null) {
+                        anyWritable = id
+                    }
                 }
             }
-            fallbackId
+            primaryVisibleWritable ?: visibleWritable ?: anyWritable
+        } catch (_: RuntimeException) {
+            null
+        }
+        if (preferred != null) return preferred
+
+        // Fallback for OEM calendar providers that omit optional columns from projection.
+        return try {
+            context.contentResolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                arrayOf(CalendarContract.Calendars._ID),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else null
+            }
         } catch (_: RuntimeException) {
             null
         }

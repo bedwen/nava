@@ -16,19 +16,26 @@ enum class RamTier(
         recommendedModelTag = "gemma-4-E2B-it"
     ),
 
-    /** 6.0 GB <= Total RAM < 12.0 GB: 4-bit quantized Gemma 4 E2B with 180s idle unload. */
+    /** 6.0 GB <= Total RAM < 12.0 GB: 4-bit quantized Gemma 4 E2B with 4096-token context and 180s idle unload. */
     TIER_1_STANDARD(
-        defaultContextTokens = 2048,
+        defaultContextTokens = 4096,
         idleUnloadTimeoutSec = 180,
         recommendedModelTag = "gemma-4-E2B-it"
     ),
 
-    /** Total RAM >= 12.0 GB: 4-bit quantized Gemma 4 E4B (or user-selected E2B battery profile). */
+    /** Total RAM >= 12.0 GB: Universal Gemma 4 E2B default (user may opt into E4B). */
     TIER_2_HIGH(
         defaultContextTokens = 4096,
         idleUnloadTimeoutSec = 180,
-        recommendedModelTag = "gemma-4-E4B-it"
+        recommendedModelTag = "gemma-4-E2B-it"
     );
+
+    /** Optimal KV-cache context ceiling when running Gemma 4 E2B on this RAM tier. */
+    val e2bOptimalContextTokens: Int
+        get() = when (this) {
+            TIER_0_LOW_MEMORY -> 1024
+            TIER_1_STANDARD, TIER_2_HIGH -> 2048
+        }
 
     companion object {
         private const val SIX_GB_BYTES = 6L * 1024L * 1024L * 1024L

@@ -108,6 +108,11 @@ sealed class NotesVaultTool(
                     provenance = ToolArgumentReader.worstProvenance(arguments),
                     decision = "SUCCESS"
                 )
+                val summary = notes.take(10).joinToString("\n") { note ->
+                    val label = note.title.ifBlank { note.noteId }
+                    val snippet = note.body.replace('\n', ' ').trim().take(80)
+                    if (snippet.isNotEmpty()) "- $label: $snippet" else "- $label"
+                }
                 return ToolResult.Success(
                     message = UserMessage(
                         key = MessageKey.ACTION_NOTE_READ,
@@ -115,13 +120,15 @@ sealed class NotesVaultTool(
                     ),
                     outputValues = mapOf(
                         "count" to notes.size.toString(),
-                        "note_ids" to notes.joinToString(",") { it.noteId }
+                        "note_ids" to notes.joinToString(",") { it.noteId },
+                        "summary" to summary
                     )
                 )
             }
 
             val noteId = noteIdTainted.value.trim()
             val found = noteStorage.findNote(noteId)
+                ?: findNoteByTitleOrContent(noteStorage.listNotes(), noteId)
             if (found == null) {
                 recordAudit(
                     timestampMs = nowMs,
@@ -783,6 +790,28 @@ sealed class NotesVaultTool(
         const val FIELD_TITLE: String = "title"
         const val FIELD_BODY: String = "body"
         const val FIELD_CONTENT: String = "content"
+
+        private val DIACRITICS_REGEX = Regex("\\p{InCombiningDiacriticalMarks}+")
+
+        private fun foldForNoteLookup(raw: String): String {
+            val nfd = java.text.Normalizer.normalize(raw, java.text.Normalizer.Form.NFD)
+            return DIACRITICS_REGEX.replace(nfd, "")
+                .replace('\u0131', 'i')
+                .replace('\u0130', 'i')
+                .lowercase(java.util.Locale.ROOT)
+                .trim()
+        }
+
+        internal fun findNoteByTitleOrContent(
+            notes: List<StoredNote>,
+            rawQuery: String
+        ): StoredNote? {
+            val foldedQuery = foldForNoteLookup(rawQuery)
+            if (foldedQuery.isEmpty()) return null
+            return notes.firstOrNull { foldForNoteLookup(it.title) == foldedQuery }
+                ?: notes.firstOrNull { foldForNoteLookup(it.title).contains(foldedQuery) }
+                ?: notes.firstOrNull { foldForNoteLookup(it.body).contains(foldedQuery) }
+        }
 
         fun createNotesReadTool(noteStorage: NoteStoragePort, auditLog: AuditLogPort): NavaTool =
             StandardNotesRead(noteStorage, auditLog)

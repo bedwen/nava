@@ -85,6 +85,15 @@ class FallbackEnglishMessageTemplateProvider : MessageTemplateProvider {
         MessageKey.ERROR_NOT_FOUND -> "Requested item not found: %1\$s"
         MessageKey.ERROR_VAULT_LOCKED -> "Nava Secure Vault is locked; authenticate with biometrics"
         MessageKey.ERROR_SAF_GRANT_MISSING -> "Directory access grant missing for %1\$s"
+        MessageKey.ACTION_REMINDER_SCHEDULED -> "Reminder scheduled: %1\$s (%2\$s)"
+        MessageKey.ACTION_REMINDER_CANCELLED -> "Reminder cancelled: %1\$s"
+        MessageKey.ACTION_BRIEFING_READY -> "Daily briefing ready (%1\$s item(s))"
+        MessageKey.INFO_NO_PERMITTED_NOTIFICATION_APPS -> "No apps have notification read permission yet; enable an app in Permissions"
+        MessageKey.ACTION_NOTES_SEARCHED -> "Found %1\$s matching note(s)"
+        MessageKey.ACTION_VOICE_NOTE_STRUCTURED -> "Structured note saved: %1\$s"
+        MessageKey.ACTION_WATCHER_CREATED -> "Watcher active: %1\$s"
+        MessageKey.ACTION_WATCHER_DELETED -> "Watcher deleted: %1\$s"
+        MessageKey.ACTION_WATCHERS_LISTED -> "%1\$s notification watcher(s)"
     }
 }
 

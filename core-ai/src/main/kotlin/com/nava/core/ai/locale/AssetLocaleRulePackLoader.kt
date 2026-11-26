@@ -2,6 +2,7 @@ package com.nava.core.ai.locale
 
 import com.nava.core.ai.json.JsonValue
 import com.nava.core.ai.json.SimpleJsonParser
+import com.nava.domain.locale.ConversationalRulePattern
 import com.nava.domain.locale.LocaleRulePack
 import com.nava.domain.locale.LocaleRulePackLoader
 import com.nava.domain.locale.RuleMatchPattern
@@ -117,12 +118,57 @@ class AssetLocaleRulePackLoader(
             )
         }
 
+        val rawConvPatterns = root["conversationalPatterns"]?.asArray() ?: emptyList()
+        val conversationalPatterns = ArrayList<ConversationalRulePattern>(rawConvPatterns.size)
+        for (item in rawConvPatterns) {
+            val obj = item.asObject()
+            val patternId = obj["patternId"]?.asString()?.trim()
+                ?: throw IllegalArgumentException("Conversational pattern missing 'patternId'")
+            val regexPattern = obj["regexPattern"]?.asString()
+                ?: throw IllegalArgumentException(
+                    "Conversational pattern '$patternId' missing 'regexPattern'"
+                )
+            val replyText = obj["replyText"]?.asString()?.trim()
+                ?: throw IllegalArgumentException(
+                    "Conversational pattern '$patternId' missing 'replyText'"
+                )
+            val priority = obj["priority"]?.asInt() ?: DEFAULT_PATTERN_PRIORITY
+            conversationalPatterns.add(
+                ConversationalRulePattern(
+                    patternId = patternId,
+                    regexPattern = regexPattern,
+                    replyText = replyText,
+                    priority = priority
+                )
+            )
+        }
+
+        val toolHints = parseStringListMap(root["toolHints"])
+
         return LocaleRulePack(
             languageTag = languageTag,
             version = version,
             patterns = patterns,
-            timeKeywords = timeKeywords
+            timeKeywords = timeKeywords,
+            conversationalPatterns = conversationalPatterns,
+            toolHints = toolHints
         )
+    }
+
+    private fun parseStringListMap(value: JsonValue?): Map<String, List<String>> {
+        if (value == null || value is JsonValue.JsonNull) return emptyMap()
+        val entries = value.asObject()
+        if (entries.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, List<String>>(entries.size)
+        for ((k, v) in entries) {
+            val items = v.asArray().mapNotNull { elem ->
+                elem.asString().trim().takeIf { it.isNotEmpty() }
+            }
+            if (items.isNotEmpty()) {
+                out[k.trim()] = items
+            }
+        }
+        return out
     }
 
     private fun parseStringMap(value: JsonValue?): Map<String, String> {

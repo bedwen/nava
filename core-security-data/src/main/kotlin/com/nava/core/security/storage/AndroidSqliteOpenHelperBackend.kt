@@ -36,7 +36,21 @@ class AndroidSqliteOpenHelperBackend(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 initial schema; future migrations will preserve encrypted blobs and AAD row IDs.
+        // Additive schema migrations preserve all existing encrypted blobs and row-bound AAD IDs.
+        if (oldVersion < 2) {
+            for (statement in EncryptedTableSchema.createStatementsForTable(
+                EncryptedTableSchema.TABLE_SCHEDULED_REMINDERS
+            )) {
+                db.execSQL(statement)
+            }
+        }
+        if (oldVersion < 3) {
+            for (statement in EncryptedTableSchema.createStatementsForTable(
+                EncryptedTableSchema.TABLE_NOTIFICATION_WATCHERS
+            )) {
+                db.execSQL(statement)
+            }
+        }
     }
 
     override fun allocateRowId(tableName: String): Long {

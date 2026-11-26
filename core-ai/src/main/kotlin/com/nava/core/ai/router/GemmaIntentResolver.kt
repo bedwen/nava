@@ -1,32 +1,43 @@
 package com.nava.core.ai.router
 
+import com.nava.core.ai.diagnostics.LlmTurnDiagnosticRecord
+import com.nava.core.ai.diagnostics.LlmTurnDiagnosticsSink
+import com.nava.core.ai.diagnostics.LlmTurnOutcome
 import com.nava.core.ai.lifecycle.ThermalModelLifecycleManager
 import com.nava.core.ai.parser.MicroDslParser
 import com.nava.core.ai.prompt.Gemma4PromptFormat
 import com.nava.core.ai.pruner.DynamicToolPruner
+import com.nava.domain.ai.EmbeddingPort
 import com.nava.domain.ai.IntentRequest
 import com.nava.domain.ai.IntentResolver
 import com.nava.domain.ai.LlmEnginePort
 import com.nava.domain.ai.LlmGenerationRequest
+import com.nava.domain.ai.LlmGenerationResult
+import com.nava.domain.ai.LlmStreamChunk
 import com.nava.domain.ai.MicroDslAst
 import com.nava.domain.ai.PlanAst
 import com.nava.domain.ai.ResolutionResult
 import com.nava.domain.ai.ResolutionTier
-import com.nava.domain.ai.SlotValueAst
-import com.nava.domain.ai.ToolCallAst
-import com.nava.domain.security.DataProvenance
-import com.nava.domain.security.SecurityFirewallPort
 import com.nava.domain.tool.SlotValueType
 import com.nava.domain.tool.ToolMetadata
-import com.nava.domain.tool.ToolSchemaField
+import com.nava.domain.locale.LocaleRulePackLoader
+import com.nava.domain.security.DataProvenance
+import com.nava.domain.security.SecurityFirewallPort
 import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.UserMessage
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.ZonedDateTime
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+
+/**
+ * Live token-streaming update emitted during pure Chat Mode turns so `:app` can render replies
+ * word-by-word without waiting for generation completion.
+ */
+data class ChatStreamDelta(
+    val requestId: String,
+    val accumulatedText: String
+)
 
 /**
  * Tier 3 cognitive IntentResolver backed by on-device Gemma 4 via [LlmEnginePort]
@@ -47,10 +58,17 @@ class GemmaIntentResolver(
     private val microDslParser: MicroDslParser = MicroDslParser(),
     private val securityFirewall: SecurityFirewallPort,
     private val systemPrefixId: String = Gemma4PromptFormat.DEFAULT_STAGE1_SYSTEM_PREFIX_ID,
-    private val planIdGenerator: () -> String = { UUID.randomUUID().toString() }
+    private val planIdGenerator: () -> String = { UUID.randomUUID().toString() },
+    private val rulePackLoader: LocaleRulePackLoader? = null,
+    private val diagnosticsSink: LlmTurnDiagnosticsSink? = null,
+    private val monotonicClockMs: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
+    private val embeddingPort: EmbeddingPort? = null
 ) : IntentResolver {
 
     override val tier: ResolutionTier = ResolutionTier.TIER_3_GEMMA
+
+    private val _streamingChatDeltas = MutableSharedFlow<ChatStreamDelta>(extraBufferCapacity = 64)
+    val streamingChatDeltas: SharedFlow<ChatStreamDelta> = _streamingChatDeltas.asSharedFlow()
 
     override suspend fun resolve(
         request: IntentRequest,
@@ -62,43 +80,130 @@ class GemmaIntentResolver(
             )
         }
 
+        val turnStartMs = monotonicClockMs()
+
         if (!lifecycleManager.canRunLlm()) {
             llmEngine.unloadModel()
+            emitDiagnostics(
+                request = request,
+                languageTag = request.languageHint?.bcp47Tag ?: FALLBACK_LANGUAGE_TAG,
+                prunedTools = emptyList(),
+                allowThoughtMode = false,
+                generationRequest = null,
+                rawOutput = "",
+                outcome = LlmTurnOutcome.THERMAL_GATE_REFUSED,
+                detail = "canRunLlm() returned false",
+                engineDurationMs = 0L,
+                turnStartMs = turnStartMs
+            )
             return ResolutionResult.ClarificationNeeded(
                 UserMessage(MessageKey.ERROR_MODEL_UNAVAILABLE)
             )
         }
 
-        val prunedTools = toolPruner.prune(request, availableTools)
-        val prunedByName = prunedTools.associateBy { it.name }
         val languageHintTag = request.languageHint?.bcp47Tag
             ?: request.normalizedText?.languageTag
             ?: FALLBACK_LANGUAGE_TAG
+        val prunedTools: List<ToolMetadata>
+        val hasActionIntent: Boolean
+        if (availableTools.isEmpty()) {
+            prunedTools = emptyList()
+            hasActionIntent = false
+        } else {
+            val localeToolHints = runCatching {
+                rulePackLoader?.loadRulePack(languageHintTag)?.toolHints
+            }.getOrNull().orEmpty()
+            val pruneResult = toolPruner.pruneWithSemanticBoost(
+                request = request,
+                availableTools = availableTools,
+                toolHints = localeToolHints,
+                embeddingPort = embeddingPort
+            )
+            prunedTools = pruneResult.tools
+            hasActionIntent = pruneResult.hasActionIntent
+        }
+        val prunedByName = prunedTools.associateBy { it.name }
+        val effectivePrefixId = if (hasActionIntent) {
+            systemPrefixId
+        } else {
+            Gemma4PromptFormat.DEFAULT_STAGE1_CHAT_SYSTEM_PREFIX_ID
+        }
 
-        val allowThoughtMode = isComplexOrMultiStepQuery(request) &&
+        val isComplex = isComplexOrMultiStepQuery(request)
+        val needsDateMath = hasActionIntent && needsCalendarDateMath(request, prunedTools)
+        val allowThoughtMode = hasActionIntent &&
+            (isComplex || needsDateMath) &&
             lifecycleManager.isThoughtModeAllowed()
+        val thoughtBudget = when {
+            !allowThoughtMode -> 0
+            isComplex -> DEFAULT_BOUNDED_THOUGHT_TOKENS
+            else -> DATE_MATH_THOUGHT_TOKENS
+        }
+
+        val currentLocalDateTimeIso = ToolPlanValidator.formatNowIso(request.issuedAtEpochMs)
 
         val generationRequest = LlmGenerationRequest(
             requestId = request.requestId,
-            systemPrefixId = systemPrefixId,
+            systemPrefixId = effectivePrefixId,
             prunedTools = prunedTools,
             userUtterance = request.rawUtterance,
             languageHintTag = languageHintTag,
             allowThoughtMode = allowThoughtMode,
-            maxThoughtTokens = if (allowThoughtMode) DEFAULT_BOUNDED_THOUGHT_TOKENS else 0,
+            maxThoughtTokens = thoughtBudget,
             maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
-            stage2BlindExtractionMode = false
+            stage2BlindExtractionMode = false,
+            conversationHistory = request.conversationHistory,
+            currentLocalDateTimeIso = currentLocalDateTimeIso
         )
 
+        fun diagnose(
+            rawOutput: String,
+            outcome: LlmTurnOutcome,
+            detail: String,
+            engineDurationMs: Long
+        ) = emitDiagnostics(
+            request = request,
+            languageTag = languageHintTag,
+            prunedTools = prunedTools,
+            allowThoughtMode = allowThoughtMode,
+            generationRequest = generationRequest,
+            rawOutput = rawOutput,
+            outcome = outcome,
+            detail = detail,
+            engineDurationMs = engineDurationMs,
+            turnStartMs = turnStartMs
+        )
+
+        val isChatMode = !hasActionIntent
         val generationResult = try {
-            llmEngine.generate(generationRequest)
-        } catch (_: IllegalStateException) {
+            if (isChatMode) {
+                collectStreamingChatTurn(generationRequest)
+            } else {
+                llmEngine.generate(generationRequest)
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (se: SecurityException) {
+            throw se
+        } catch (t: Throwable) {
+            diagnose(
+                rawOutput = "",
+                outcome = LlmTurnOutcome.ENGINE_FAILURE,
+                detail = "${t.javaClass.simpleName}: ${t.message}",
+                engineDurationMs = monotonicClockMs() - turnStartMs
+            )
             return ResolutionResult.ClarificationNeeded(
                 UserMessage(MessageKey.ERROR_MODEL_UNAVAILABLE)
             )
         }
 
         if (!generationResult.thoughtClosedCleanly) {
+            diagnose(
+                rawOutput = generationResult.rawOutput,
+                outcome = LlmTurnOutcome.THOUGHT_BUDGET_EXCEEDED,
+                detail = "thoughtTokensUsed=${generationResult.thoughtTokensUsed}",
+                engineDurationMs = generationResult.durationMs
+            )
             return ResolutionResult.ClarificationNeeded(
                 UserMessage(MessageKey.ERROR_THOUGHT_BUDGET_EXCEEDED)
             )
@@ -114,22 +219,35 @@ class GemmaIntentResolver(
 
         return when (parsed) {
             is MicroDslAst.Plan -> {
-                val calls = parsed.plan.calls
                 // Reject any hallucinated/out-of-scope tool or schema-invalid arguments BEFORE minting a token.
-                for (call in calls) {
-                    val metadata = prunedByName[call.toolName]
-                    if (metadata == null || !isSchemaValidToolCall(call, metadata)) {
+                val validation = ToolPlanValidator.validateAndNormalizeCalls(
+                    calls = parsed.plan.calls,
+                    prunedByName = prunedByName,
+                    targetContextId = request.targetContextId
+                )
+                val boundCalls = when (validation) {
+                    is ToolPlanValidator.ValidationResult.Valid -> validation.normalizedCalls
+                    is ToolPlanValidator.ValidationResult.UnknownTool -> {
+                        diagnose(
+                            rawOutput = generationResult.rawOutput,
+                            outcome = LlmTurnOutcome.REJECTED_UNKNOWN_TOOL,
+                            detail = "tool '${validation.toolName}' is not in pruned set",
+                            engineDurationMs = generationResult.durationMs
+                        )
                         return ResolutionResult.ClarificationNeeded(
                             UserMessage(MessageKey.ERROR_CLARIFICATION_NEEDED)
                         )
                     }
-                }
-
-                val boundCalls = calls.map { call ->
-                    if (call.targetId == null) {
-                        call.copy(targetId = request.targetContextId)
-                    } else {
-                        call
+                    is ToolPlanValidator.ValidationResult.SchemaInvalid -> {
+                        diagnose(
+                            rawOutput = generationResult.rawOutput,
+                            outcome = LlmTurnOutcome.REJECTED_SCHEMA_INVALID,
+                            detail = "${validation.toolName}: ${validation.detail}",
+                            engineDurationMs = generationResult.durationMs
+                        )
+                        return ResolutionResult.ClarificationNeeded(
+                            UserMessage(MessageKey.ERROR_CLARIFICATION_NEEDED)
+                        )
                     }
                 }
                 val finalPlan = PlanAst(
@@ -147,6 +265,12 @@ class GemmaIntentResolver(
                     nowEpochMs = request.issuedAtEpochMs
                 )
 
+                diagnose(
+                    rawOutput = generationResult.rawOutput,
+                    outcome = LlmTurnOutcome.RESOLVED_PLAN,
+                    detail = "calls=${boundCalls.joinToString(",") { it.toolName }}",
+                    engineDurationMs = generationResult.durationMs
+                )
                 ResolutionResult.ResolvedPlan(
                     tier = ResolutionTier.TIER_3_GEMMA,
                     plan = finalPlan,
@@ -155,6 +279,12 @@ class GemmaIntentResolver(
             }
 
             is MicroDslAst.DirectReply -> {
+                diagnose(
+                    rawOutput = generationResult.rawOutput,
+                    outcome = LlmTurnOutcome.DIRECT_REPLY,
+                    detail = "replyChars=${parsed.text.length}",
+                    engineDurationMs = generationResult.durationMs
+                )
                 ResolutionResult.ConversationalReply(
                     tier = ResolutionTier.TIER_3_GEMMA,
                     replyText = parsed.text,
@@ -163,6 +293,12 @@ class GemmaIntentResolver(
             }
 
             is MicroDslAst.ParseError -> {
+                diagnose(
+                    rawOutput = generationResult.rawOutput,
+                    outcome = LlmTurnOutcome.PARSE_ERROR,
+                    detail = parsed.reason,
+                    engineDurationMs = generationResult.durationMs
+                )
                 ResolutionResult.ClarificationNeeded(
                     UserMessage(MessageKey.ERROR_CLARIFICATION_NEEDED)
                 )
@@ -170,52 +306,50 @@ class GemmaIntentResolver(
         }
     }
 
-    private fun isSchemaValidToolCall(call: ToolCallAst, metadata: ToolMetadata): Boolean {
-        val fieldsByName = metadata.fields.associateBy { it.name }
-        for ((argName, taintedVal) in call.arguments) {
-            val field = fieldsByName[argName] ?: return false
-            if (!isValueValidForField(taintedVal.value, field)) {
-                return false
-            }
+    private fun emitDiagnostics(
+        request: IntentRequest,
+        languageTag: String,
+        prunedTools: List<ToolMetadata>,
+        allowThoughtMode: Boolean,
+        generationRequest: LlmGenerationRequest?,
+        rawOutput: String,
+        outcome: LlmTurnOutcome,
+        detail: String,
+        engineDurationMs: Long,
+        turnStartMs: Long
+    ) {
+        val sink = diagnosticsSink ?: return
+        runCatching {
+            val promptPayload = generationRequest?.let { gen ->
+                if (gen.systemPrefixId == Gemma4PromptFormat.DEFAULT_STAGE1_CHAT_SYSTEM_PREFIX_ID) {
+                    Gemma4PromptFormat.formatChatUserTurn(gen.userUtterance)
+                } else {
+                    Gemma4PromptFormat.formatTurnPayloadSegmentBAndC(
+                        prunedTools = gen.prunedTools,
+                        languageHintTag = gen.languageHintTag,
+                        userUtterance = gen.userUtterance,
+                        conversationHistory = gen.conversationHistory,
+                        currentLocalDateTimeIso = gen.currentLocalDateTimeIso
+                    )
+                }
+            }.orEmpty()
+            sink.onTurn(
+                LlmTurnDiagnosticRecord(
+                    requestId = request.requestId,
+                    languageTag = languageTag,
+                    userUtterance = request.rawUtterance,
+                    historyTurnCount = request.conversationHistory.size,
+                    prunedToolNames = prunedTools.map { it.name },
+                    allowThoughtMode = allowThoughtMode,
+                    promptPayload = promptPayload,
+                    rawOutput = rawOutput,
+                    outcome = outcome,
+                    detail = detail,
+                    engineDurationMs = engineDurationMs,
+                    totalDurationMs = monotonicClockMs() - turnStartMs
+                )
+            )
         }
-        for (field in metadata.fields) {
-            if (!field.required) continue
-            val present = call.arguments[field.name] ?: return false
-            val value = present.value
-            if (value is SlotValueAst.NullValue) return false
-            if (value is SlotValueAst.StringValue && value.value.isBlank()) return false
-        }
-        return true
-    }
-
-    private fun isValueValidForField(value: SlotValueAst, field: ToolSchemaField): Boolean {
-        if (value is SlotValueAst.NullValue) {
-            return !field.required
-        }
-        return when (field.valueType) {
-            SlotValueType.INTEGER -> value is SlotValueAst.IntValue
-            SlotValueType.DURATION_SECONDS -> value is SlotValueAst.IntValue && value.value > 0L
-            SlotValueType.BOOLEAN -> value is SlotValueAst.BooleanValue
-            SlotValueType.ISO_TIME -> value is SlotValueAst.StringValue &&
-                CANONICAL_TIME_REGEX.matches(value.value)
-
-            SlotValueType.ISO_DATE -> value is SlotValueAst.StringValue &&
-                runCatching { LocalDate.parse(value.value) }.isSuccess
-
-            SlotValueType.ISO_DATETIME -> value is SlotValueAst.StringValue &&
-                isValidIsoDateTime(value.value)
-
-            SlotValueType.STRING -> value is SlotValueAst.StringValue &&
-                (!field.required || value.value.isNotBlank())
-        }
-    }
-
-    private fun isValidIsoDateTime(raw: String): Boolean {
-        if (raw.isBlank()) return false
-        return runCatching { OffsetDateTime.parse(raw) }.isSuccess ||
-            runCatching { ZonedDateTime.parse(raw) }.isSuccess ||
-            runCatching { LocalDateTime.parse(raw) }.isSuccess ||
-            runCatching { Instant.parse(raw) }.isSuccess
     }
 
     /**
@@ -235,15 +369,91 @@ class GemmaIntentResolver(
         return numericCount >= 2 && CLAUSE_SEPARATOR_REGEX.containsMatchIn(text)
     }
 
+    private suspend fun collectStreamingChatTurn(
+        generationRequest: LlmGenerationRequest
+    ): LlmGenerationResult {
+        var completed: LlmGenerationResult? = null
+        var aborted: LlmStreamChunk.Aborted? = null
+        val streamedOutput = StringBuilder()
+        var lastEmitMs = monotonicClockMs() - CHAT_STREAM_COALESCE_MS
+        var lastEmittedText: String? = null
+
+        llmEngine.generateStream(generationRequest).collect { chunk ->
+            when (chunk) {
+                is LlmStreamChunk.ThoughtDelta -> Unit
+                is LlmStreamChunk.OutputDelta -> {
+                    streamedOutput.append(chunk.text)
+                    val trimmed = streamedOutput.toString().trimStart()
+                    // Never surface raw Gemma control/tool tokens during live streaming.
+                    if (trimmed.isNotEmpty() && !trimmed.startsWith("<|")) {
+                        val nowMs = monotonicClockMs()
+                        if (nowMs - lastEmitMs >= CHAT_STREAM_COALESCE_MS) {
+                            _streamingChatDeltas.tryEmit(
+                                ChatStreamDelta(
+                                    requestId = generationRequest.requestId,
+                                    accumulatedText = trimmed
+                                )
+                            )
+                            lastEmitMs = nowMs
+                            lastEmittedText = trimmed
+                        }
+                    }
+                }
+                is LlmStreamChunk.Completed -> completed = chunk.result
+                is LlmStreamChunk.Aborted -> aborted = chunk
+            }
+        }
+
+        val abortChunk = aborted
+        if (abortChunk != null) {
+            if (abortChunk.thoughtBudgetExceeded) {
+                return LlmGenerationResult(
+                    rawOutput = streamedOutput.toString(),
+                    thoughtClosedCleanly = false
+                )
+            }
+            throw IllegalStateException(abortChunk.reason)
+        }
+
+        val finalResult = completed ?: LlmGenerationResult(rawOutput = streamedOutput.toString())
+        val finalTrimmed = finalResult.rawOutput.trimStart()
+        if (finalTrimmed.isNotEmpty() &&
+            !finalTrimmed.startsWith("<|") &&
+            finalTrimmed != lastEmittedText
+        ) {
+            _streamingChatDeltas.tryEmit(
+                ChatStreamDelta(
+                    requestId = generationRequest.requestId,
+                    accumulatedText = finalTrimmed
+                )
+            )
+        }
+        return finalResult
+    }
+
+    private fun needsCalendarDateMath(
+        request: IntentRequest,
+        prunedTools: List<ToolMetadata>
+    ): Boolean {
+        val hasCalendarTool = prunedTools.any {
+            it.name.startsWith("calendar_") &&
+                it.fields.any { f -> f.valueType == SlotValueType.ISO_DATETIME || f.valueType == SlotValueType.ISO_DATE }
+        }
+        if (!hasCalendarTool) return false
+        return NUMERIC_GROUP_REGEX.containsMatchIn(request.rawUtterance)
+    }
+
     companion object {
         const val DEFAULT_BOUNDED_THOUGHT_TOKENS: Int = 256
+        const val DATE_MATH_THOUGHT_TOKENS: Int = 128
         const val DEFAULT_MAX_OUTPUT_TOKENS: Int = 512
+        const val CHAT_STREAM_COALESCE_MS: Long = 35L
 
         private const val MULTI_STEP_TOKEN_THRESHOLD: Int = 12
         private const val MULTI_STEP_CHAR_THRESHOLD: Int = 48
         private const val FALLBACK_LANGUAGE_TAG: String = "en"
+        private const val NANOS_PER_MILLI: Long = 1_000_000L
 
-        private val CANONICAL_TIME_REGEX: Regex = Regex("""^(?:[01]\d|2[0-3]):[0-5]\d$""")
         private val WHITESPACE_REGEX: Regex = Regex("""\s+""")
         private val CLAUSE_SEPARATOR_REGEX: Regex = Regex("""[;,\u060C\u3001\uFF0C]""")
         private val NUMERIC_GROUP_REGEX: Regex = Regex("""\d+(?:[:hH]\d{2})?""")

@@ -4,10 +4,12 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.nativeCanvas
 import com.nava.domain.ai.ResolutionTier
+import com.nava.domain.ai.ThermalState
 import com.nava.domain.ui.CoreActivityState
 import com.nava.domain.ui.NeuralCanvasState
 import com.nava.domain.ui.NeuralPulseEvent
@@ -28,19 +30,21 @@ class NeuralCanvasEngine {
 
     /**
      * Recomputes radial neuron coordinates, hub rings, and synapse edge endpoints ONLY when the
-     * canvas dimensions change.
+     * canvas dimensions change or [forceRecompute] is true (e.g. after visible nodes change).
      *
      * @return true if layout was recomputed, false if dimensions were unchanged or non-positive.
      */
     fun syncLayoutIfNeeded(
         width: Float,
         height: Float,
-        buffers: NeuralCanvasBuffers
+        buffers: NeuralCanvasBuffers,
+        forceRecompute: Boolean = false,
+        ellipticalLayout: Boolean = false
     ): Boolean {
         if (width <= 0f || height <= 0f) {
             return false
         }
-        if (width == buffers.lastWidth && height == buffers.lastHeight) {
+        if (!forceRecompute && width == buffers.lastWidth && height == buffers.lastHeight) {
             return false
         }
 
@@ -48,42 +52,89 @@ class NeuralCanvasEngine {
         buffers.lastHeight = height
 
         val cx = width * 0.5f
-        val cy = height * 0.5f
+        val cy = if (ellipticalLayout) height * 0.46f else height * 0.5f
         val minDim = if (width < height) width else height
         buffers.centerX = cx
         buffers.centerY = cy
         buffers.minDimension = minDim
 
-        val innerCoreRadius = minDim * INNER_CORE_RADIUS_RATIO
-        val outerShellRadius = minDim * OUTER_SHELL_RADIUS_RATIO
-        val thermalRingRadius = minDim * THERMAL_RING_RADIUS_RATIO
+        val innerCoreRadius = if (ellipticalLayout) minDim * 0.044f else minDim * INNER_CORE_RADIUS_RATIO
+        val outerShellRadius = if (ellipticalLayout) minDim * 0.088f else minDim * OUTER_SHELL_RADIUS_RATIO
+        val thermalRingRadius = if (ellipticalLayout) minDim * 0.110f else minDim * THERMAL_RING_RADIUS_RATIO
         val orbitRadius = minDim * ORBIT_RADIUS_RATIO
-        val nodeRadius = minDim * NODE_RADIUS_RATIO
-        val labelOffset = minDim * LABEL_OFFSET_RATIO
+        val nodeRadius = if (ellipticalLayout) minDim * 0.076f else minDim * NODE_RADIUS_RATIO
+        val labelOffset = if (ellipticalLayout) minDim * 0.048f else minDim * LABEL_OFFSET_RATIO
 
         buffers.ringRadii[NeuralCanvasBuffers.RING_INNER_CORE] = innerCoreRadius
         buffers.ringRadii[NeuralCanvasBuffers.RING_OUTER_SHELL] = outerShellRadius
         buffers.ringRadii[NeuralCanvasBuffers.RING_THERMAL] = thermalRingRadius
         buffers.ringRadii[NeuralCanvasBuffers.RING_ORBIT] = orbitRadius
-        buffers.labelTextSizePx = (minDim * LABEL_TEXT_SIZE_RATIO).coerceIn(MIN_LABEL_PX, MAX_LABEL_PX)
+        buffers.labelTextSizePx = (minDim * (if (ellipticalLayout) 0.036f else LABEL_TEXT_SIZE_RATIO))
+            .coerceIn(MIN_LABEL_PX, MAX_LABEL_PX)
 
+        // Default all node coordinates to hub center so hidden nodes never project to (0, 0).
         for (i in 0 until NeuralCanvasBuffers.NEURON_COUNT) {
-            val angle = START_ANGLE_RAD + i * ANGLE_STEP_RAD
-            val cosA = cos(angle).toFloat()
-            val sinA = sin(angle).toFloat()
-
-            val nx = cx + orbitRadius * cosA
-            val ny = cy + orbitRadius * sinA
-            buffers.nodeX[i] = nx
-            buffers.nodeY[i] = ny
+            buffers.nodeX[i] = cx
+            buffers.nodeY[i] = cy
             buffers.nodeRadii[i] = nodeRadius
-            buffers.nodeLabelY[i] = ny + nodeRadius + labelOffset
+            buffers.nodeLabelY[i] = cy + nodeRadius + labelOffset
+        }
 
-            buffers.edgeStartX[i] = cx + outerShellRadius * cosA
-            buffers.edgeStartY[i] = cy + outerShellRadius * sinA
+        val visibleCount = buffers.visibleNodeCount
+        if (visibleCount > 0) {
+            val angleStep = (2.0 * PI) / visibleCount.toDouble()
             val edgeEndRadius = orbitRadius - nodeRadius
-            buffers.edgeEndX[i] = cx + edgeEndRadius * cosA
-            buffers.edgeEndY[i] = cy + edgeEndRadius * sinA
+            val rxMax = (width * 0.345f).coerceAtMost(width * 0.5f - nodeRadius - 18f)
+            val ryMax = (height * 0.315f).coerceAtMost(cy - nodeRadius - 10f)
+            val startGap = if (ellipticalLayout) minDim * 0.024f else 0f
+
+            for (slot in 0 until visibleCount) {
+                val idx = buffers.visibleNodeIndices[slot]
+                if (idx < 0 || idx >= NeuralCanvasBuffers.NEURON_COUNT) {
+                    continue
+                }
+                val angle = START_ANGLE_RAD + slot * angleStep
+                val cosA = cos(angle).toFloat()
+                val sinA = sin(angle).toFloat()
+
+                val nx = if (ellipticalLayout) cx + rxMax * cosA else cx + orbitRadius * cosA
+                val ny = if (ellipticalLayout) cy + ryMax * sinA else cy + orbitRadius * sinA
+                buffers.nodeX[idx] = nx
+                buffers.nodeY[idx] = ny
+                buffers.nodeRadii[idx] = nodeRadius
+                buffers.nodeLabelY[idx] = ny + nodeRadius + labelOffset
+
+                val sx = cx + (outerShellRadius + startGap) * cosA
+                val sy = cy + (outerShellRadius + startGap) * sinA
+                val ex = if (ellipticalLayout) {
+                    nx
+                } else {
+                    cx + edgeEndRadius * cosA
+                }
+                val ey = if (ellipticalLayout) {
+                    ny
+                } else {
+                    cy + edgeEndRadius * sinA
+                }
+                buffers.edgeStartX[idx] = sx
+                buffers.edgeStartY[idx] = sy
+                buffers.edgeEndX[idx] = ex
+                buffers.edgeEndY[idx] = ey
+
+                // Architectural quadratic Bezier control point matching reference curvature.
+                val midX = (sx + ex) * 0.5f
+                val midY = (sy + ey) * 0.5f
+                if (ellipticalLayout) {
+                    val bend = if (cosA >= 0f) -minDim * 0.044f else minDim * 0.044f
+                    buffers.edgeControlX[idx] = midX + (-sinA) * bend
+                    buffers.edgeControlY[idx] = midY + cosA * bend
+                } else {
+                    val dx = ex - sx
+                    val dy = ey - sy
+                    buffers.edgeControlX[idx] = midX - dy * EDGE_CURVE_FACTOR
+                    buffers.edgeControlY[idx] = midY + dx * EDGE_CURVE_FACTOR
+                }
+            }
         }
 
         buffers.layoutComputeCount += 1
@@ -96,6 +147,9 @@ class NeuralCanvasEngine {
                 buffers = buffers
             )
             samplePulseTrail(buffers)
+            if (buffers.returnPulseActive) {
+                sampleReturnPulseTrail(buffers)
+            }
         }
         return true
     }
@@ -143,6 +197,10 @@ class NeuralCanvasEngine {
             buffers.errorFlashAlpha = 0f
             buffers.pulseActive = false
             buffers.pulsePointCount = 0
+            buffers.returnPulseActive = false
+            buffers.returnPulseProgress = 0f
+            buffers.returnPulsePointCount = 0
+            buffers.coreConfirmRingAlpha = 0f
             for (i in 0 until NeuralCanvasBuffers.NEURON_COUNT) {
                 val active = buffers.isNeuronActive(i)
                 buffers.nodeGlowAlpha[i] = if (active) IDLE_ACTIVE_NODE_GLOW else 0f
@@ -213,6 +271,10 @@ class NeuralCanvasEngine {
             buffers.pulseSourceIndex = -1
             buffers.pulseTargetIndex = -1
             buffers.pulsePointCount = 0
+            buffers.returnPulseActive = false
+            buffers.returnPulseProgress = 0f
+            buffers.returnPulsePointCount = 0
+            buffers.coreConfirmRingAlpha = 0f
         } else {
             if (buffers.activePulseEventId != pulse.eventId) {
                 buffers.activePulseEventId = pulse.eventId
@@ -220,6 +282,10 @@ class NeuralCanvasEngine {
                 buffers.pulseCompleted = false
                 buffers.pulseCompletionDispatched = false
                 buffers.pulseActive = true
+                buffers.returnPulseActive = false
+                buffers.returnPulseProgress = 0f
+                buffers.returnPulsePointCount = 0
+                buffers.coreConfirmRingAlpha = 0f
             }
 
             configurePulseTrajectory(pulse, buffers)
@@ -235,6 +301,28 @@ class NeuralCanvasEngine {
             }
 
             samplePulseTrail(buffers)
+
+            // Bidirectional return confirmation wave for hub-to-node pulses.
+            if (!buffers.pulseIsInterNeuron && buffers.pulseProgress >= RETURN_PULSE_START_PROGRESS) {
+                val retProgress = (
+                    (buffers.pulseProgress - RETURN_PULSE_START_PROGRESS) /
+                        (1f - RETURN_PULSE_START_PROGRESS)
+                    ).coerceIn(0f, 1f)
+                buffers.returnPulseActive = true
+                buffers.returnPulseProgress = retProgress
+                sampleReturnPulseTrail(buffers)
+                buffers.coreConfirmRingAlpha = if (retProgress > RETURN_RING_START_PROGRESS) {
+                    ((retProgress - RETURN_RING_START_PROGRESS) / (1f - RETURN_RING_START_PROGRESS))
+                        .coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+            } else {
+                buffers.returnPulseActive = false
+                buffers.returnPulseProgress = 0f
+                buffers.returnPulsePointCount = 0
+                buffers.coreConfirmRingAlpha = 0f
+            }
 
             if (buffers.pulseCompleted && !buffers.pulseCompletionDispatched) {
                 buffers.pulseCompletionDispatched = true
@@ -275,29 +363,34 @@ class NeuralCanvasEngine {
     }
 
     /**
-     * Zero-allocation hit test mapping canvas touch coordinates to the nearest [NeuronNodeId]
-     * within its hit radius, or null if no node was tapped.
+     * Zero-allocation hit test mapping canvas touch coordinates to the nearest visible
+     * [NeuronNodeId] within its hit radius, or null if no visible node was tapped.
      */
     fun hitTestNeuron(
         x: Float,
         y: Float,
         buffers: NeuralCanvasBuffers
     ): NeuronNodeId? {
-        if (buffers.lastWidth <= 0f || buffers.lastHeight <= 0f) {
+        if (buffers.lastWidth <= 0f || buffers.lastHeight <= 0f || buffers.visibleNodeCount <= 0) {
             return null
         }
 
         var bestIndex = -1
         var bestDistSq = Float.MAX_VALUE
 
-        for (i in 0 until NeuralCanvasBuffers.NEURON_COUNT) {
-            val hitRadius = buffers.nodeRadii[i] * HIT_RADIUS_MULTIPLIER
-            val dx = x - buffers.nodeX[i]
-            val dy = y - buffers.nodeY[i]
+        val visibleCount = buffers.visibleNodeCount
+        for (slot in 0 until visibleCount) {
+            val idx = buffers.visibleNodeIndices[slot]
+            if (idx < 0 || idx >= NeuralCanvasBuffers.NEURON_COUNT) {
+                continue
+            }
+            val hitRadius = buffers.nodeRadii[idx] * HIT_RADIUS_MULTIPLIER
+            val dx = x - buffers.nodeX[idx]
+            val dy = y - buffers.nodeY[idx]
             val distSq = dx * dx + dy * dy
             if (distSq <= hitRadius * hitRadius && distSq < bestDistSq) {
                 bestDistSq = distSq
-                bestIndex = i
+                bestIndex = idx
             }
         }
 
@@ -325,34 +418,37 @@ class NeuralCanvasEngine {
         val cx = buffers.centerX
         val cy = buffers.centerY
         val center = Offset(cx, cy)
+        val visibleCount = buffers.visibleNodeCount
 
-        // 1. Subtle radial orbit guide ring
-        scope.drawCircle(
-            color = palette.orbitRing,
-            radius = buffers.ringRadii[NeuralCanvasBuffers.RING_ORBIT],
-            center = center,
-            alpha = 0.45f,
-            style = palette.orbitStroke
-        )
-
-        // 2. Base hub-to-neuron synapse edges
-        for (i in 0 until NeuralCanvasBuffers.NEURON_COUNT) {
-            val edgeColor = if (buffers.isNeuronActive(i) || (buffers.pulseActive && i == buffers.pulseTargetIndex && !buffers.pulseIsInterNeuron)) {
-                palette.edgeActive
-            } else {
-                palette.edgeIdle
+        // 1. Subtle curved hub-to-neuron synapse edges for visible nodes only
+        // (Orbit guide ring is intentionally omitted to keep the minimalist stage clean.)
+        val edgeStrokeWidth = palette.synapseEdgeStroke.width
+        for (slot in 0 until visibleCount) {
+            val i = buffers.visibleNodeIndices[slot]
+            if (i < 0 || i >= NeuralCanvasBuffers.NEURON_COUNT) {
+                continue
             }
-            scope.drawLine(
+            val isEdgeActive = buffers.isNeuronActive(i) ||
+                (buffers.pulseActive && i == buffers.pulseTargetIndex && !buffers.pulseIsInterNeuron)
+            val edgeColor = if (isEdgeActive) palette.edgeActive else palette.edgeIdle
+            val alpha = buffers.edgeAlpha[i].coerceIn(0f, 1f)
+            drawQuadraticEdgeSegments(
+                scope = scope,
+                p0x = buffers.edgeStartX[i],
+                p0y = buffers.edgeStartY[i],
+                p1x = buffers.edgeControlX[i],
+                p1y = buffers.edgeControlY[i],
+                p2x = buffers.edgeEndX[i],
+                p2y = buffers.edgeEndY[i],
                 color = edgeColor,
-                start = Offset(buffers.edgeStartX[i], buffers.edgeStartY[i]),
-                end = Offset(buffers.edgeEndX[i], buffers.edgeEndY[i]),
-                strokeWidth = palette.synapseEdgeStroke.width,
-                alpha = buffers.edgeAlpha[i].coerceIn(0f, 1f)
+                strokeWidth = edgeStrokeWidth,
+                alpha = alpha
             )
         }
 
-        // 3. Active synapse pulse trajectory (Hub -> Neuron or Inter-Neuron Chain)
+        // 3. Active outbound synapse pulse trajectory (Hub -> Neuron or Inter-Neuron Chain)
         val pulse = state.activePulse
+        val headRadius = (buffers.minDimension * 0.015f).coerceAtLeast(3f)
         if (pulse != null && buffers.pulseActive && buffers.pulsePointCount >= 2) {
             val pulseColor = palette.pulseColorFor(pulse)
             val pointCount = buffers.pulsePointCount
@@ -370,8 +466,6 @@ class NeuralCanvasEngine {
             }
 
             val headCenter = Offset(buffers.pulseHeadX, buffers.pulseHeadY)
-            val headRadius = (buffers.minDimension * 0.015f).coerceAtLeast(3f)
-
             if (pulse.isBiometricSynapse) {
                 scope.drawCircle(
                     color = palette.biometricSynapseGlow,
@@ -398,25 +492,58 @@ class NeuralCanvasEngine {
             )
         }
 
-        // 4. Central Dual-Core Hub (Thermal Ring + Outer Cortex Shell + Gemma 4 Inner Core)
+        // 3b. Bidirectional return confirmation pulse (Target Node -> Hub Core)
+        if (buffers.returnPulseActive && buffers.returnPulsePointCount >= 2) {
+            val retCount = buffers.returnPulsePointCount
+            val retStrokeW = palette.synapsePulseStroke.width * 0.85f
+            for (j in 0 until retCount - 1) {
+                val segAlpha = buffers.returnPulsePointsAlpha[j + 1].coerceIn(0f, 1f)
+                scope.drawLine(
+                    color = palette.returnPulseColor,
+                    start = Offset(buffers.returnPulsePointsX[j], buffers.returnPulsePointsY[j]),
+                    end = Offset(buffers.returnPulsePointsX[j + 1], buffers.returnPulsePointsY[j + 1]),
+                    strokeWidth = retStrokeW,
+                    alpha = segAlpha
+                )
+            }
+            val retHead = Offset(buffers.returnPulseHeadX, buffers.returnPulseHeadY)
+            scope.drawCircle(
+                color = palette.returnPulseColor,
+                radius = headRadius * 1.65f,
+                center = retHead,
+                alpha = 0.38f,
+                style = Fill
+            )
+            scope.drawCircle(
+                color = palette.pulseHeadHighlight,
+                radius = headRadius * 0.85f,
+                center = retHead,
+                alpha = 0.95f,
+                style = Fill
+            )
+        }
+
+        // 4. Central Dual-Core Hub (Thermal Ring on stress + Outer Cortex Shell + Gemma 4 Inner Core)
         val thermalRadius = buffers.ringRadii[NeuralCanvasBuffers.RING_THERMAL]
         val outerRadius = buffers.ringRadii[NeuralCanvasBuffers.RING_OUTER_SHELL]
         val innerRadius = buffers.ringRadii[NeuralCanvasBuffers.RING_INNER_CORE]
 
-        // Thermal indicator ring
-        val thermalColor = palette.thermalRingColorFor(state.thermalState)
-        val thermalAlpha = when (state.thermalState) {
-            com.nava.domain.ai.ThermalState.NORMAL -> 0.55f
-            com.nava.domain.ai.ThermalState.MODERATE -> 0.85f
-            com.nava.domain.ai.ThermalState.SEVERE_OR_HIGHER -> 1.0f
+        // Thermal indicator ring drawn only under elevated thermal pressure
+        if (state.thermalState != ThermalState.NORMAL) {
+            val thermalColor = palette.thermalRingColorFor(state.thermalState)
+            val thermalAlpha = when (state.thermalState) {
+                ThermalState.MODERATE -> 0.85f
+                ThermalState.SEVERE_OR_HIGHER -> 1.0f
+                ThermalState.NORMAL -> 0f
+            }
+            scope.drawCircle(
+                color = thermalColor,
+                radius = thermalRadius,
+                center = center,
+                alpha = thermalAlpha,
+                style = palette.thermalRingStroke
+            )
         }
-        scope.drawCircle(
-            color = thermalColor,
-            radius = thermalRadius,
-            center = center,
-            alpha = thermalAlpha,
-            style = palette.thermalRingStroke
-        )
 
         // Outer Cortex Shell backdrop & structural ring
         val shellColor = palette.outerShellColorFor(state.coreState, pulse?.tier)
@@ -424,14 +551,14 @@ class NeuralCanvasEngine {
             color = palette.hubBackdrop,
             radius = outerRadius,
             center = center,
-            alpha = 0.96f,
+            alpha = 1f,
             style = Fill
         )
         scope.drawCircle(
             color = shellColor,
             radius = outerRadius,
             center = center,
-            alpha = if (buffers.outerShellPulseAlpha > 0f) 0.95f else 0.70f,
+            alpha = if (buffers.outerShellPulseAlpha > 0f) 0.98f else 0.92f,
             style = palette.outerShellStroke
         )
 
@@ -441,7 +568,18 @@ class NeuralCanvasEngine {
                 color = shellColor,
                 radius = haloExpand,
                 center = center,
-                alpha = (buffers.outerShellPulseAlpha * 0.45f).coerceIn(0f, 1f),
+                alpha = (buffers.outerShellPulseAlpha * 0.42f).coerceIn(0f, 1f),
+                style = palette.outerShellPulseStroke
+            )
+        }
+
+        if (buffers.coreConfirmRingAlpha > 0.01f) {
+            val confirmAlpha = buffers.coreConfirmRingAlpha.coerceIn(0f, 1f)
+            scope.drawCircle(
+                color = palette.coreConfirmRingColor,
+                radius = outerRadius * (1.02f + 0.14f * confirmAlpha),
+                center = center,
+                alpha = confirmAlpha * 0.85f,
                 style = palette.outerShellPulseStroke
             )
         }
@@ -456,29 +594,21 @@ class NeuralCanvasEngine {
             )
         }
 
-        // Gemma 4 Inner Core: stays dark/asleep unless isInnerCoreAwake == true
-        scope.drawCircle(
-            color = palette.innerCoreDormantFill,
-            radius = innerRadius,
-            center = center,
-            alpha = 1f,
-            style = Fill
-        )
-
+        // Gemma 4 Inner Core: crisp solid center dot when dormant; glows when isInnerCoreAwake == true
         if (buffers.isInnerCoreAwake && buffers.innerCoreGlowAlpha > 0f) {
             val glowAlpha = buffers.innerCoreGlowAlpha.coerceIn(0f, 1f)
             scope.drawCircle(
                 color = palette.innerCoreAwakeHalo,
                 radius = innerRadius * (1.15f + 0.18f * glowAlpha),
                 center = center,
-                alpha = glowAlpha * 0.42f,
+                alpha = glowAlpha * 0.36f,
                 style = Fill
             )
             scope.drawCircle(
                 color = palette.innerCoreAwakeCore,
                 radius = innerRadius * 0.88f,
                 center = center,
-                alpha = glowAlpha * 0.92f,
+                alpha = glowAlpha * 0.90f,
                 style = Fill
             )
             scope.drawCircle(
@@ -489,32 +619,30 @@ class NeuralCanvasEngine {
                 style = Fill
             )
         } else {
-            val rimColor = if (state.isModelResident) {
-                palette.innerCoreResidentRim
-            } else {
-                palette.innerCoreDormantRim
-            }
             scope.drawCircle(
-                color = rimColor,
-                radius = innerRadius,
+                color = palette.innerCoreDormantFill,
+                radius = innerRadius * 0.72f,
                 center = center,
-                alpha = if (state.isModelResident) 0.75f else 0.55f,
-                style = palette.innerCoreRimStroke
+                alpha = 1f,
+                style = Fill
             )
         }
 
-        // 5. Radial Neuron Nodes & Pre-Formatted Bidi Labels
+        // 5. Visible Radial Neuron Squircle Cards, Line-Art Glyphs & Pre-Formatted Bidi Labels
         val labelPaint = palette.nodeLabelPaint
         if (labelPaint != null && labelPaint.textSize != buffers.labelTextSizePx) {
             labelPaint.textSize = buffers.labelTextSizePx
         }
 
-        for (i in 0 until NeuralCanvasBuffers.NEURON_COUNT) {
+        for (slot in 0 until visibleCount) {
+            val i = buffers.visibleNodeIndices[slot]
+            if (i < 0 || i >= NeuralCanvasBuffers.NEURON_COUNT) {
+                continue
+            }
             val nodeId = NeuralCanvasBuffers.NEURON_NODES[i]
             val nx = buffers.nodeX[i]
             val ny = buffers.nodeY[i]
             val nr = buffers.nodeRadii[i]
-            val nodeCenter = Offset(nx, ny)
             val isActive = buffers.isNeuronActive(i)
             val isVault = nodeId == NeuronNodeId.VAULT
             val isBiometricNode = pulse != null &&
@@ -530,11 +658,14 @@ class NeuralCanvasEngine {
                     isVault -> palette.vaultLockedStroke
                     else -> palette.nodeGlowActive
                 }
-                scope.drawCircle(
+                val haloR = nr * (1.24f + 0.14f * glowAlpha)
+                val haloCorner = haloR * SQUIRCLE_CORNER_RATIO
+                scope.drawRoundRect(
                     color = haloColor,
-                    radius = nr * (1.28f + 0.16f * glowAlpha),
-                    center = nodeCenter,
-                    alpha = glowAlpha * 0.32f,
+                    topLeft = Offset(nx - haloR, ny - haloR),
+                    size = Size(haloR * 2f, haloR * 2f),
+                    cornerRadius = CornerRadius(haloCorner, haloCorner),
+                    alpha = glowAlpha * 0.28f,
                     style = Fill
                 )
             }
@@ -558,51 +689,68 @@ class NeuralCanvasEngine {
                 palette.nodeBorderStroke
             }
 
-            scope.drawCircle(
+            val nodeTopLeft = Offset(nx - nr, ny - nr)
+            val nodeSize = Size(nr * 2f, nr * 2f)
+            val nodeCornerRadius = nr * SQUIRCLE_CORNER_RATIO
+            val nodeCorner = CornerRadius(nodeCornerRadius, nodeCornerRadius)
+
+            // Subtle architectural shadow ring behind squircle card (zero allocation)
+            val shadowPad = nr * 0.06f
+            val shadowCorner = (nr + shadowPad) * SQUIRCLE_CORNER_RATIO
+            scope.drawRoundRect(
+                color = palette.nodeStrokeIdle,
+                topLeft = Offset(nx - nr - shadowPad, ny - nr + shadowPad * 0.6f),
+                size = Size((nr + shadowPad) * 2f, (nr + shadowPad) * 2f),
+                cornerRadius = CornerRadius(shadowCorner, shadowCorner),
+                alpha = 0.22f,
+                style = Fill
+            )
+
+            scope.drawRoundRect(
                 color = fillColor,
-                radius = nr,
-                center = nodeCenter,
+                topLeft = nodeTopLeft,
+                size = nodeSize,
+                cornerRadius = nodeCorner,
                 alpha = 1f,
                 style = Fill
             )
-            scope.drawCircle(
+            scope.drawRoundRect(
                 color = borderColor,
-                radius = nr,
-                center = nodeCenter,
+                topLeft = nodeTopLeft,
+                size = nodeSize,
+                cornerRadius = nodeCorner,
                 alpha = 1f,
                 style = borderStroke
             )
 
             if (isBiometricNode) {
-                scope.drawCircle(
+                val bioR = nr * 1.18f
+                val bioCorner = bioR * SQUIRCLE_CORNER_RATIO
+                scope.drawRoundRect(
                     color = palette.biometricSynapsePrimary,
-                    radius = nr * 1.18f,
-                    center = nodeCenter,
+                    topLeft = Offset(nx - bioR, ny - bioR),
+                    size = Size(bioR * 2f, bioR * 2f),
+                    cornerRadius = CornerRadius(bioCorner, bioCorner),
                     alpha = 0.85f,
                     style = palette.biometricRingStroke
                 )
             }
 
-            if (isVault) {
-                drawVaultGlyph(
-                    scope = scope,
-                    cx = nx,
-                    cy = ny,
-                    radius = nr,
-                    isUnlocked = state.isVaultUnlocked,
-                    color = borderColor,
-                    palette = palette
-                )
-            } else {
-                val dotRadius = nr * if (isActive) 0.30f else 0.18f
-                scope.drawCircle(
-                    color = borderColor,
-                    radius = dotRadius,
-                    center = nodeCenter,
-                    alpha = if (isActive) 0.95f else 0.55f,
-                    style = Fill
-                )
+            val iconColor: Color = when {
+                isVault && state.isVaultUnlocked -> palette.vaultUnlockedStroke
+                isActive -> palette.nodeIconActive
+                else -> palette.nodeIconIdle
             }
+            drawNodeGlyph(
+                scope = scope,
+                nodeId = nodeId,
+                cx = nx,
+                cy = ny,
+                radius = nr,
+                isVaultUnlocked = state.isVaultUnlocked,
+                color = iconColor,
+                palette = palette
+            )
 
             if (labelPaint != null) {
                 val textColorArgb = when {
@@ -612,7 +760,7 @@ class NeuralCanvasEngine {
                     else -> palette.labelColorIdleArgb
                 }
                 labelPaint.color = textColorArgb
-                labelPaint.alpha = if (isActive || isVault || glowAlpha > 0.25f) 245 else 205
+                labelPaint.alpha = if (isActive || glowAlpha > 0.25f) 250 else 235
                 scope.drawContext.canvas.nativeCanvas.drawText(
                     buffers.formattedLabels[i],
                     nx,
@@ -621,6 +769,353 @@ class NeuralCanvasEngine {
                 )
             }
         }
+    }
+
+    private fun drawQuadraticEdgeSegments(
+        scope: DrawScope,
+        p0x: Float,
+        p0y: Float,
+        p1x: Float,
+        p1y: Float,
+        p2x: Float,
+        p2y: Float,
+        color: Color,
+        strokeWidth: Float,
+        alpha: Float
+    ) {
+        var prevX = p0x
+        var prevY = p0y
+        val invSegments = 1f / EDGE_BEZIER_SEGMENTS.toFloat()
+        for (step in 1..EDGE_BEZIER_SEGMENTS) {
+            val t = step * invSegments
+            val inv = 1f - t
+            val nextX = inv * inv * p0x + 2f * inv * t * p1x + t * t * p2x
+            val nextY = inv * inv * p0y + 2f * inv * t * p1y + t * t * p2y
+            scope.drawLine(
+                color = color,
+                start = Offset(prevX, prevY),
+                end = Offset(nextX, nextY),
+                strokeWidth = strokeWidth,
+                alpha = alpha
+            )
+            prevX = nextX
+            prevY = nextY
+        }
+    }
+
+    private fun drawNodeGlyph(
+        scope: DrawScope,
+        nodeId: NeuronNodeId,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        isVaultUnlocked: Boolean,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        when (nodeId) {
+            NeuronNodeId.CLOCK -> drawClockGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.CALENDAR -> drawCalendarGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.NOTES -> drawNotesGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.MESSAGES -> drawMessagesGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.VAULT -> drawVaultGlyph(scope, cx, cy, radius, isVaultUnlocked, color, palette)
+            NeuronNodeId.FILES -> drawFilesGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.AUDIO_DND -> drawAudioDndGlyph(scope, cx, cy, radius, color, palette)
+            NeuronNodeId.ROUTINES -> drawRoutinesGlyph(scope, cx, cy, radius, color, palette)
+        }
+    }
+
+    private fun drawClockGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val strokeW = palette.lockGlyphStroke.width
+        scope.drawCircle(
+            color = color,
+            radius = radius * 0.44f,
+            center = Offset(cx, cy),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx, cy - radius * 0.24f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(cx, cy),
+            end = Offset(cx + radius * 0.18f, cy + radius * 0.10f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+    }
+
+    private fun drawCalendarGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val strokeW = palette.lockGlyphStroke.width
+        val w = radius * 0.84f
+        val h = radius * 0.72f
+        val left = cx - w * 0.5f
+        val top = cy - h * 0.42f
+        val corner = radius * 0.12f
+
+        scope.drawRoundRect(
+            color = color,
+            topLeft = Offset(left, top),
+            size = Size(w, h),
+            cornerRadius = CornerRadius(corner, corner),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        val dividerY = top + h * 0.32f
+        scope.drawLine(
+            color = color,
+            start = Offset(left, dividerY),
+            end = Offset(left + w, dividerY),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        val tickOffsetX = w * 0.24f
+        val tickTop = top - radius * 0.12f
+        val tickBottom = top + radius * 0.06f
+        scope.drawLine(
+            color = color,
+            start = Offset(cx - tickOffsetX, tickTop),
+            end = Offset(cx - tickOffsetX, tickBottom),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(cx + tickOffsetX, tickTop),
+            end = Offset(cx + tickOffsetX, tickBottom),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+    }
+
+    private fun drawNotesGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val strokeW = palette.lockGlyphStroke.width
+        val w = radius * 0.72f
+        val h = radius * 0.84f
+        val left = cx - w * 0.5f
+        val top = cy - h * 0.5f
+        val corner = radius * 0.12f
+
+        scope.drawRoundRect(
+            color = color,
+            topLeft = Offset(left, top),
+            size = Size(w, h),
+            cornerRadius = CornerRadius(corner, corner),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        val lineStartX = left + w * 0.22f
+        val lineEndX = left + w * 0.78f
+        val shortEndX = left + w * 0.58f
+        scope.drawLine(
+            color = color,
+            start = Offset(lineStartX, cy - h * 0.20f),
+            end = Offset(lineEndX, cy - h * 0.20f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(lineStartX, cy),
+            end = Offset(lineEndX, cy),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(lineStartX, cy + h * 0.20f),
+            end = Offset(shortEndX, cy + h * 0.20f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+    }
+
+    private fun drawMessagesGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val strokeW = palette.lockGlyphStroke.width
+        val w = radius * 0.84f
+        val h = radius * 0.60f
+        val left = cx - w * 0.5f
+        val top = cy - h * 0.58f
+        val corner = radius * 0.14f
+
+        scope.drawRoundRect(
+            color = color,
+            topLeft = Offset(left, top),
+            size = Size(w, h),
+            cornerRadius = CornerRadius(corner, corner),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        val bottomY = top + h
+        val tailTipX = left + w * 0.14f
+        val tailTipY = bottomY + radius * 0.18f
+        scope.drawLine(
+            color = color,
+            start = Offset(left + w * 0.28f, bottomY),
+            end = Offset(tailTipX, tailTipY),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(tailTipX, tailTipY),
+            end = Offset(left + w * 0.44f, bottomY),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+    }
+
+    private fun drawFilesGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val strokeW = palette.lockGlyphStroke.width
+        val w = radius * 0.86f
+        val h = radius * 0.60f
+        val left = cx - w * 0.5f
+        val top = cy - h * 0.34f
+        val corner = radius * 0.12f
+
+        scope.drawRoundRect(
+            color = color,
+            topLeft = Offset(left, top),
+            size = Size(w, h),
+            cornerRadius = CornerRadius(corner, corner),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        val tabTop = top - radius * 0.14f
+        val tabLeft = left + radius * 0.06f
+        val tabRight = left + w * 0.42f
+        scope.drawLine(
+            color = color,
+            start = Offset(tabLeft, top),
+            end = Offset(tabLeft, tabTop),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(tabLeft, tabTop),
+            end = Offset(tabRight, tabTop),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+        scope.drawLine(
+            color = color,
+            start = Offset(tabRight, tabTop),
+            end = Offset(left + w * 0.52f, top),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round,
+            alpha = 0.95f
+        )
+    }
+
+    private fun drawAudioDndGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        val r = radius * 0.42f
+        scope.drawArc(
+            color = color,
+            startAngle = 30f,
+            sweepAngle = 240f,
+            useCenter = false,
+            topLeft = Offset(cx - r, cy - r),
+            size = Size(r * 2f, r * 2f),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        val innerCx = cx + r * 0.433f
+        val innerCy = cy - r * 0.25f
+        val innerR = r * 0.866f
+        scope.drawArc(
+            color = color,
+            startAngle = 60f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(innerCx - innerR, innerCy - innerR),
+            size = Size(innerR * 2f, innerR * 2f),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+    }
+
+    private fun drawRoutinesGlyph(
+        scope: DrawScope,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        color: Color,
+        palette: NeuralCanvasPalette
+    ) {
+        scope.drawCircle(
+            color = color,
+            radius = radius * 0.40f,
+            center = Offset(cx, cy),
+            alpha = 0.95f,
+            style = palette.lockGlyphStroke
+        )
+        scope.drawCircle(
+            color = color,
+            radius = radius * 0.14f,
+            center = Offset(cx, cy),
+            alpha = 0.95f,
+            style = Fill
+        )
     }
 
     private fun drawVaultGlyph(
@@ -701,8 +1196,13 @@ class NeuralCanvasEngine {
             buffers.pulseStartY = startY
             buffers.pulseEndX = endX
             buffers.pulseEndY = endY
-            buffers.pulseControlX = (startX + endX) * 0.5f
-            buffers.pulseControlY = (startY + endY) * 0.5f
+            if (wakesInnerCore) {
+                buffers.pulseControlX = (startX + endX) * 0.5f
+                buffers.pulseControlY = (startY + endY) * 0.5f
+            } else {
+                buffers.pulseControlX = buffers.edgeControlX[targetIndex]
+                buffers.pulseControlY = buffers.edgeControlY[targetIndex]
+            }
             return
         }
 
@@ -772,17 +1272,49 @@ class NeuralCanvasEngine {
         buffers.pulsePointCount = count
     }
 
+    private fun sampleReturnPulseTrail(buffers: NeuralCanvasBuffers) {
+        val progress = buffers.returnPulseProgress.coerceIn(0f, 1f)
+        // Reversed curve: Target Node (pulseEnd) -> Control -> Hub Core (pulseStart)
+        val p0x = buffers.pulseEndX
+        val p0y = buffers.pulseEndY
+        val p1x = buffers.pulseControlX
+        val p1y = buffers.pulseControlY
+        val p2x = buffers.pulseStartX
+        val p2y = buffers.pulseStartY
+
+        val headInv = 1f - progress
+        buffers.returnPulseHeadX =
+            headInv * headInv * p0x + 2f * headInv * progress * p1x + progress * progress * p2x
+        buffers.returnPulseHeadY =
+            headInv * headInv * p0y + 2f * headInv * progress * p1y + progress * progress * p2y
+
+        val trailStart = (progress - RETURN_PULSE_TRAIL_SPAN).coerceAtLeast(0f)
+        val span = progress - trailStart
+        val count = NeuralCanvasBuffers.PULSE_TRAIL_SAMPLES
+        val denom = (count - 1).toFloat()
+
+        for (i in 0 until count) {
+            val frac = i.toFloat() / denom
+            val t = trailStart + span * frac
+            val inv = 1f - t
+            buffers.returnPulsePointsX[i] = inv * inv * p0x + 2f * inv * t * p1x + t * t * p2x
+            buffers.returnPulsePointsY[i] = inv * inv * p0y + 2f * inv * t * p1y + t * t * p2y
+            buffers.returnPulsePointsAlpha[i] = 0.08f + 0.88f * frac * frac
+        }
+        buffers.returnPulsePointCount = count
+    }
+
     private fun pulseDurationMsFor(tier: ResolutionTier): Float {
         return when (tier) {
             ResolutionTier.TIER_1_RULE -> TIER_1_PULSE_DURATION_MS
             ResolutionTier.TIER_2_CACHE -> TIER_2_PULSE_DURATION_MS
+            ResolutionTier.TIER_2_5_FUNCTION_GEMMA -> TIER_2_PULSE_DURATION_MS
             ResolutionTier.TIER_3_GEMMA -> TIER_3_PULSE_DURATION_MS
         }
     }
 
     companion object {
         private const val START_ANGLE_RAD: Double = -PI / 2.0
-        private const val ANGLE_STEP_RAD: Double = (2.0 * PI) / NeuralCanvasBuffers.NEURON_COUNT
         private const val TWO_PI_F: Float = (2.0 * PI).toFloat()
 
         private const val INNER_CORE_RADIUS_RATIO: Float = 0.075f
@@ -795,9 +1327,16 @@ class NeuralCanvasEngine {
         private const val MIN_LABEL_PX: Float = 16f
         private const val MAX_LABEL_PX: Float = 38f
 
+        private const val EDGE_CURVE_FACTOR: Float = 0.06f
+        private const val EDGE_BEZIER_SEGMENTS: Int = 14
+        private const val SQUIRCLE_CORNER_RATIO: Float = 0.50f
+
         private const val HIT_RADIUS_MULTIPLIER: Float = 1.35f
         private const val INTER_NEURON_CURVE_RATIO: Float = 0.14f
         private const val PULSE_TRAIL_SPAN: Float = 0.35f
+        private const val RETURN_PULSE_START_PROGRESS: Float = 0.62f
+        private const val RETURN_PULSE_TRAIL_SPAN: Float = 0.32f
+        private const val RETURN_RING_START_PROGRESS: Float = 0.65f
 
         private const val CORE_ANGULAR_SPEED_RAD_PER_SEC: Float = 3.2f
         private const val MAX_FRAME_DELTA_MS: Long = 100L
@@ -807,8 +1346,8 @@ class NeuralCanvasEngine {
         const val TIER_3_PULSE_DURATION_MS: Float = 850f
 
         private const val IDLE_ACTIVE_NODE_GLOW: Float = 0.45f
-        private const val IDLE_ACTIVE_EDGE_ALPHA: Float = 0.65f
-        private const val IDLE_RESTING_EDGE_ALPHA: Float = 0.30f
-        private const val ACTIVE_RESTING_EDGE_ALPHA: Float = 0.32f
+        private const val IDLE_ACTIVE_EDGE_ALPHA: Float = 0.85f
+        private const val IDLE_RESTING_EDGE_ALPHA: Float = 0.72f
+        private const val ACTIVE_RESTING_EDGE_ALPHA: Float = 0.45f
     }
 }

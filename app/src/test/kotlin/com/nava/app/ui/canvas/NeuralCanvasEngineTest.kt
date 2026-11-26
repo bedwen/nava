@@ -572,6 +572,6 @@ class NeuralCanvasEngineTest {
         metrics.reset()
         assertEquals(0L, metrics.drawCount.get())
         assertEquals(0L, metrics.animationFrameCount.get())
-        assertTrue(abs(palette.outerShellStroke.width - 5.0f) < 0.01f)
+        assertTrue(abs(palette.outerShellStroke.width - 7.2f) < 0.01f)
     }
 }

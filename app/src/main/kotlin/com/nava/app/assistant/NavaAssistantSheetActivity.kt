@@ -8,7 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,14 +19,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,8 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -50,10 +64,13 @@ import com.nava.app.di.AppContainer
 import com.nava.app.di.NavaApplication
 import com.nava.app.security.BiometricPromptLabels
 import com.nava.app.security.NotificationResolutionResult
+import com.nava.app.ui.components.NavaIcons
 import com.nava.app.ui.confirmation.ActionConfirmationCard
 import com.nava.app.ui.hub.NavaHubViewModel
 import com.nava.app.ui.navigation.NavaViewModelFactory
 import com.nava.app.ui.theme.NavaTheme
+import com.nava.app.ui.theme.NavaThemeExtras
+import com.nava.app.ui.theme.NavaThemeMode
 import com.nava.app.voice.VoiceInputState
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -92,6 +109,12 @@ class NavaAssistantSheetActivity : AppCompatActivity() {
             val activeLocale = remember(activeLocaleTag) {
                 Locale.forLanguageTag(activeLocaleTag)
             }
+            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
+            val darkOverride = when (themeMode) {
+                NavaThemeMode.DARK -> true
+                NavaThemeMode.LIGHT -> false
+                NavaThemeMode.SYSTEM -> null
+            }
 
             DisposableEffect(appContainer) {
                 onDispose {
@@ -99,7 +122,10 @@ class NavaAssistantSheetActivity : AppCompatActivity() {
                 }
             }
 
-            NavaTheme(activeLocale = activeLocale) {
+            NavaTheme(
+                isDarkThemeOverride = darkOverride,
+                activeLocale = activeLocale
+            ) {
                 NavaAssistantModalSheetContent(
                     appContainer = appContainer,
                     hubViewModel = hubViewModel,
@@ -199,6 +225,8 @@ private fun NavaAssistantModalSheetContent(
 ) {
     val state by hubViewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val colors = NavaThemeExtras.colors
+    val bidiFormatter = appContainer.bidiTextFormatter
     val locale = remember(state.activeLocaleTag) {
         Locale.forLanguageTag(state.activeLocaleTag)
     }
@@ -217,11 +245,14 @@ private fun NavaAssistantModalSheetContent(
 
     val scrimInteraction = remember { MutableInteractionSource() }
     val sheetInteraction = remember { MutableInteractionSource() }
+    val isListening = state.voiceState is VoiceInputState.Listening ||
+        state.voiceState is VoiceInputState.PartialTranscript
+    val canSend = state.queryInput.isNotBlank() && !state.isProcessing
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.55f))
+            .background(Color.Black.copy(alpha = 0.50f))
             .clickable(
                 interactionSource = scrimInteraction,
                 indication = null,
@@ -229,13 +260,14 @@ private fun NavaAssistantModalSheetContent(
             ),
         contentAlignment = Alignment.BottomCenter
     ) {
-        Card(
+        Surface(
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            ),
+            color = colors.surfaceCard,
+            contentColor = colors.inkPrimary,
+            border = BorderStroke(1.dp, colors.borderStone),
             modifier = Modifier
                 .fillMaxWidth()
+                .imePadding()
                 .clickable(
                     interactionSource = sheetInteraction,
                     indication = null,
@@ -245,34 +277,71 @@ private fun NavaAssistantModalSheetContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Drag handle
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .height(4.dp)
+                            .background(colors.borderStone, RoundedCornerShape(999.dp))
+                    )
+                }
+
+                // Header row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.tile_assistant_label),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = NavaIcons.HubRing,
+                            contentDescription = null,
+                            tint = colors.trustNavyTint,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.tile_assistant_label),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.inkPrimary
+                        )
+                    }
                     TextButton(onClick = onDismissSheet) {
-                        Text(text = stringResource(R.string.action_cancel))
+                        Text(
+                            text = stringResource(R.string.action_cancel),
+                            color = colors.inkSecondary
+                        )
                     }
                 }
 
+                HorizontalDivider(
+                    thickness = 1.dp,
+                    color = colors.borderStone
+                )
+
                 if (rejectedReasonCode != null) {
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
+                        color = colors.alertCrimsonSurface,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, colors.borderStone),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = stringResource(R.string.error_security_violation),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            color = colors.alertCrimson,
                             modifier = Modifier.padding(12.dp)
                         )
                     }
@@ -283,7 +352,7 @@ private fun NavaAssistantModalSheetContent(
                     ActionConfirmationCard(
                         item = activeConfirmation,
                         messageRenderer = appContainer.messageRenderer,
-                        bidiFormatter = appContainer.bidiTextFormatter,
+                        bidiFormatter = bidiFormatter,
                         locale = locale,
                         onApprove = { reqId ->
                             hubViewModel.onApproveConfirmation(
@@ -303,20 +372,24 @@ private fun NavaAssistantModalSheetContent(
                     when (state.voiceState) {
                         is VoiceInputState.OfflinePackMissing -> {
                             Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(8.dp),
+                                color = colors.alertCrimsonSurface,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, colors.borderStone),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
                                     Text(
                                         text = stringResource(R.string.voice_pack_missing_warning),
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.error
+                                        color = colors.alertCrimson
                                     )
                                     Text(
                                         text = stringResource(R.string.voice_offline_pack_missing_desc),
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                        color = colors.inkPrimary
                                     )
                                 }
                             }
@@ -324,39 +397,117 @@ private fun NavaAssistantModalSheetContent(
 
                         is VoiceInputState.Listening,
                         is VoiceInputState.PartialTranscript -> {
-                            Text(
-                                text = stringResource(R.string.voice_listening),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Surface(
+                                color = colors.bgLinen,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, colors.borderStone),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.voice_listening),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.trustNavyTint,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                )
+                            }
                         }
 
                         else -> Unit
                     }
 
-                    state.statusMessage?.let { status ->
-                        Text(
-                            text = status,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                    val displayMessage = state.statusMessage?.takeIf { it.isNotBlank() }
+                        ?: state.conversationalReply?.takeIf { it.isNotBlank() }
+                    if (displayMessage != null) {
+                        Surface(
+                            color = colors.bgLinen,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, colors.borderStone),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = bidiFormatter.wrapText(displayMessage, locale),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.inkPrimary,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
                     }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        OutlinedTextField(
-                            value = state.queryInput,
-                            onValueChange = { hubViewModel.onQueryInputChanged(it) },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            placeholder = {
-                                Text(text = stringResource(R.string.voice_idle))
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(colors.bgLinen, RoundedCornerShape(22.dp))
+                                .border(1.dp, colors.borderStone, RoundedCornerShape(22.dp))
+                                .padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            BasicTextField(
+                                value = state.queryInput,
+                                onValueChange = { hubViewModel.onQueryInputChanged(it) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(vertical = 8.dp),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    color = colors.inkPrimary
+                                ),
+                                cursorBrush = SolidColor(colors.trustNavyTint),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(
+                                    onSend = {
+                                        if (canSend) {
+                                            hubViewModel.submitQuery()
+                                        }
+                                    }
+                                ),
+                                decorationBox = { innerTextField ->
+                                    Box(contentAlignment = Alignment.CenterStart) {
+                                        if (state.queryInput.isEmpty()) {
+                                            Text(
+                                                text = stringResource(R.string.hub_command_placeholder),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = colors.inkMuted,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
+                            )
+
+                            Surface(
+                                onClick = {
+                                    if (canSend) {
+                                        hubViewModel.submitQuery()
+                                    }
+                                },
+                                enabled = canSend,
+                                shape = CircleShape,
+                                color = if (canSend) colors.trustNavy else colors.surfaceCard,
+                                border = if (canSend) null else BorderStroke(1.dp, colors.borderStone),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = NavaIcons.Send,
+                                        contentDescription = stringResource(R.string.hub_send_command),
+                                        tint = if (canSend) Color.White else colors.inkMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
-                        )
-                        OutlinedButton(
+                        }
+
+                        Surface(
                             onClick = {
                                 val hasMicPerm = ContextCompat.checkSelfPermission(
                                     context,
@@ -368,15 +519,27 @@ private fun NavaAssistantModalSheetContent(
                                 } else {
                                     hubViewModel.onVoiceButtonClicked(hasRecordAudioPermission = true)
                                 }
+                            },
+                            shape = CircleShape,
+                            color = if (isListening) colors.untrustedAccent else colors.trustNavy,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isListening) {
+                                        NavaIcons.Close
+                                    } else {
+                                        NavaIcons.VoiceSpectrum
+                                    },
+                                    contentDescription = if (isListening) {
+                                        stringResource(R.string.hub_voice_stop)
+                                    } else {
+                                        stringResource(R.string.voice_title)
+                                    },
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
-                        ) {
-                            Text(text = stringResource(R.string.voice_title))
-                        }
-                        Button(
-                            onClick = { hubViewModel.submitQuery() },
-                            enabled = state.queryInput.isNotBlank() && !state.isProcessing
-                        ) {
-                            Text(text = stringResource(R.string.onboarding_button_continue))
                         }
                     }
                 }

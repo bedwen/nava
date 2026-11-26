@@ -22,6 +22,7 @@ object AutomationToolNames {
     const val NOTES_READ: String = "notes_read"
     const val NOTES_CREATE: String = "notes_create"
     const val NOTES_DELETE: String = "notes_delete"
+    const val NOTES_SEARCH: String = "notes_search"
     const val VAULT_READ: String = "vault_read"
     const val VAULT_WRITE: String = "vault_write"
     const val VAULT_DELETE: String = "vault_delete"
@@ -42,21 +43,38 @@ object AutomationToolNames {
     const val SAF_WRITE: String = "saf_write"
     const val SAF_DELETE: String = "saf_delete"
 
-    /** All canonical Phase 4 tool names in deterministic sorted order. */
+    // Zero-Battery Reminders, Natural-Language Routines & Morning Briefing
+    const val SCHEDULE_REMINDER: String = "schedule_reminder"
+    const val CANCEL_REMINDER: String = "cancel_reminder"
+    const val PROPOSE_ROUTINE: String = "propose_routine"
+    const val DAILY_BRIEFING: String = "daily_briefing"
+
+    // Proactive Notification Watchers (Zero-Battery Passive Alerts)
+    const val CREATE_NOTIFICATION_WATCHER: String = "create_notification_watcher"
+    const val MANAGE_NOTIFICATION_WATCHERS: String = "manage_notification_watchers"
+
+    /** All canonical tool names in deterministic sorted order. */
     val ALL: Set<String> = linkedSetOf(
         CALENDAR_CREATE,
         CALENDAR_MODIFY,
         CALENDAR_QUERY,
+        CANCEL_REMINDER,
+        CREATE_NOTIFICATION_WATCHER,
         CREATE_SMS_DRAFT,
+        DAILY_BRIEFING,
         DIAL_CALL,
         LAUNCH_APP,
+        MANAGE_NOTIFICATION_WATCHERS,
         NOTES_CREATE,
         NOTES_DELETE,
         NOTES_READ,
+        NOTES_SEARCH,
         PLACE_CALL,
+        PROPOSE_ROUTINE,
         SAF_DELETE,
         SAF_READ,
         SAF_WRITE,
+        SCHEDULE_REMINDER,
         SET_ALARM,
         SET_DND,
         SET_TIMER,

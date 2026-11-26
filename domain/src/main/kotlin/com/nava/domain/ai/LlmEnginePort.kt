@@ -16,7 +16,9 @@ data class LlmGenerationRequest(
     val allowThoughtMode: Boolean = false,
     val maxThoughtTokens: Int = 256,
     val maxOutputTokens: Int = 512,
-    val stage2BlindExtractionMode: Boolean = false
+    val stage2BlindExtractionMode: Boolean = false,
+    val conversationHistory: List<ConversationTurn> = emptyList(),
+    val currentLocalDateTimeIso: String? = null
 ) {
     init {
         require(requestId.isNotBlank()) { "requestId must not be blank" }
@@ -26,6 +28,9 @@ data class LlmGenerationRequest(
         require(maxOutputTokens > 0) { "maxOutputTokens must be positive" }
         require(!stage2BlindExtractionMode || prunedTools.isEmpty()) {
             "Stage 2 blind extraction mode requires empty prunedTools"
+        }
+        require(!stage2BlindExtractionMode || conversationHistory.isEmpty()) {
+            "Stage 2 blind extraction mode requires empty conversationHistory"
         }
     }
 }
@@ -60,5 +65,6 @@ interface LlmEnginePort {
     suspend fun currentThermalState(): ThermalState
     suspend fun generate(request: LlmGenerationRequest): LlmGenerationResult
     fun generateStream(request: LlmGenerationRequest): Flow<LlmStreamChunk>
+    suspend fun resetChatSession() {}
     suspend fun unloadModel()
 }

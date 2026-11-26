@@ -168,4 +168,58 @@ class AutomationCommonFoundationTest {
         )
         assertEquals(listOf("place_call"), interactive.pendingToolNames)
     }
+
+    @Test
+    fun foldAppLabelForMatchHandlesTurkishAndUnicodeDiacriticsDeterministically() {
+        // Turkish dotted and dotless i
+        assertEquals("iletiler", AndroidAutomationIntentGateway.foldAppLabelForMatch("\u0130letiler"))
+        assertEquals("hatirlatici", AndroidAutomationIntentGateway.foldAppLabelForMatch("Hat\u0131rlat\u0131c\u0131"))
+
+        // Turkish umlaut and cedilla characters
+        assertEquals("muzik", AndroidAutomationIntentGateway.foldAppLabelForMatch("M\u00fczik"))
+        assertEquals("fotograflar", AndroidAutomationIntentGateway.foldAppLabelForMatch("Foto\u011fraflar"))
+        assertEquals("muzik", AndroidAutomationIntentGateway.foldAppLabelForMatch("   M\u00dcZ\u0130K   "))
+        assertEquals("sehir", AndroidAutomationIntentGateway.foldAppLabelForMatch("\u015eehir"))
+        assertEquals("canta", AndroidAutomationIntentGateway.foldAppLabelForMatch("\u00c7anta"))
+
+        // European accented characters
+        assertEquals("cafe", AndroidAutomationIntentGateway.foldAppLabelForMatch("Caf\u00e9"))
+        assertEquals("uber", AndroidAutomationIntentGateway.foldAppLabelForMatch("\u00dcber"))
+
+        // Blank and empty inputs
+        assertEquals("", AndroidAutomationIntentGateway.foldAppLabelForMatch(""))
+        assertEquals("", AndroidAutomationIntentGateway.foldAppLabelForMatch("   "))
+
+        // Gateway interface companion delegation
+        assertEquals("iletiler", AutomationIntentGateway.foldAppLabelForMatch("\u0130letiler"))
+    }
+
+    @Test
+    fun automationIntentGatewayDefaultInterfaceMethodsKeepFakesCompatible() {
+        val minimalGateway = object : AutomationIntentGateway {
+            override fun hasRuntimePermission(permission: String): Boolean = true
+            override fun isNotificationPolicyAccessGranted(): Boolean = true
+            override fun isNotificationListenerEnabled(): Boolean = true
+            override fun dispatchSetAlarm(hour: Int, minute: Int, label: String?, skipUi: Boolean): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+            override fun dispatchSetTimer(durationSeconds: Int, label: String?, skipUi: Boolean): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+            override fun dispatchSmsDraft(recipient: String, body: String): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+            override fun dispatchDial(phoneNumber: String): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+            override fun dispatchDirectCall(phoneNumber: String): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+            override fun resolveLaunchablePackage(appNameOrPackage: String): String? = null
+            override fun dispatchLaunchApp(packageName: String): PlatformDispatchResult =
+                PlatformDispatchResult.Dispatched()
+        }
+
+        assertTrue(minimalGateway.canPostNotifications())
+        assertTrue(minimalGateway.listLaunchableApps().isEmpty())
+
+        val appInfo = InstalledAppInfo(packageName = "com.nava.test", displayLabel = "Test App")
+        assertEquals("com.nava.test", appInfo.packageName)
+        assertEquals("Test App", appInfo.displayLabel)
+    }
 }

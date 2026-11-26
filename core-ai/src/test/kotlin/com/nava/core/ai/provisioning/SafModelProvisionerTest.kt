@@ -82,6 +82,54 @@ class SafModelProvisionerTest {
     }
 
     @Test
+    fun reusesInMemoryDigestCacheWithoutSidecarFilesAndStillHashesFreshOnVerify() = runTest {
+        val payload = "cached-gemma4-e2b-weights".repeat(64).toByteArray()
+        val expectedSha = sha256Hex(payload)
+        val spec = PinnedModelSpec(
+            modelId = "gemma-4-E2B-it",
+            fileName = "gemma-4-E2B-it.litertlm",
+            expectedSha256Hex = expectedSha,
+            expectedSizeBytes = payload.size.toLong(),
+            minRamTier = RamTier.TIER_1_STANDARD
+        )
+        val storage = FakeStorageSpaceProvider(
+            availableBytesValue = payload.size.toLong() + SafModelProvisioner.SAFETY_HEADROOM_BYTES + 1024L
+        )
+        val provisioner = SafModelProvisioner(modelsDir, storage, clockMs = { 1_700_000_000_000L })
+
+        val imported = provisioner.importFromStream(
+            inputStream = ByteArrayInputStream(payload),
+            sourceSizeBytes = payload.size.toLong(),
+            pinnedSpec = spec
+        )
+
+        // Ensure zero sidecar files exist in modelsDir
+        val filesAfterImport = modelsDir.listFiles()?.toList().orEmpty()
+        assertEquals(1, filesAfterImport.size)
+        assertTrue(filesAfterImport.single().name.endsWith(".litertlm"))
+
+        // Tamper in-place keeping the exact same size and lastModified timestamp
+        val targetFile = File(imported.absolutePath)
+        val originalMtime = targetFile.lastModified()
+        val tampered = payload.copyOf().apply { this[0] = (this[0].toInt() xor 0x01).toByte() }
+        targetFile.writeBytes(tampered)
+        targetFile.setLastModified(originalMtime)
+
+        // findProvisionedModel / listProvisionedModels use metadata-keyed in-memory digest cache
+        assertEquals(expectedSha, provisioner.findProvisionedModel(spec.fileName)!!.sha256Hex)
+        assertEquals(expectedSha, provisioner.listProvisionedModels().single().sha256Hex)
+
+        // verifyFileIntegrity MUST ALWAYS hash fresh from disk and detect tampering!
+        assertFalse(provisioner.verifyFileIntegrity(imported.absolutePath, expectedSha))
+
+        // Changing size or mtime invalidates cache entry
+        val updatedPayload = payload + byteArrayOf(0x42)
+        targetFile.writeBytes(updatedPayload)
+        targetFile.setLastModified(originalMtime + 1000L)
+        assertEquals(sha256Hex(updatedPayload), provisioner.findProvisionedModel(spec.fileName)!!.sha256Hex)
+    }
+
+    @Test
     fun rejectsInsufficientTwoTimesStorageHeadroom() = runTest {
         val payload = ByteArray(4096) { 0x5A }
         val spec = PinnedModelSpec(

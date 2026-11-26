@@ -1,9 +1,12 @@
 package com.nava.core.ai.pruner
 
 import com.nava.core.ai.testing.CoreAiTestFixtures
+import com.nava.domain.ai.EmbeddingPort
 import com.nava.domain.ai.IntentRequest
 import com.nava.domain.tool.ToolCategory
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,5 +97,65 @@ class DynamicToolPrunerTest {
         assertEquals(ToolCategory.COMMUNICATION, commBucket)
         assertEquals(ToolCategory.DEVICE_SETTINGS, settingsBucket)
         assertEquals(ToolCategory.NOTES_FILES, notesBucket)
+    }
+
+    @Test
+    fun pruneWithSemanticBoostSurfacesParaphrasedToolsCachesEmbeddingsAndRespectsThreshold() = runTest {
+        var docEmbedCalls = 0
+        val fakeEmbeddingPort = object : EmbeddingPort {
+            override suspend fun isEmbeddingModelAvailable(): Boolean = true
+
+            override suspend fun embedQuery(query: String): FloatArray? {
+                return when {
+                    query.contains("wake me up", ignoreCase = true) -> floatArrayOf(1f, 0f, 0f)
+                    else -> floatArrayOf(0f, 0f, 1f)
+                }
+            }
+
+            override suspend fun embedDocument(title: String, text: String): FloatArray? {
+                docEmbedCalls++
+                return when (title) {
+                    "set_alarm" -> floatArrayOf(0.85f, 0.52f, 0f) // cosine with wake query = 0.85 >= 0.42
+                    "set_dnd" -> floatArrayOf(0.20f, 0.98f, 0f)   // cosine = 0.20 < 0.42
+                    else -> floatArrayOf(0f, 1f, 0f)              // cosine = 0.0 < 0.42
+                }
+            }
+
+            override suspend fun unloadEmbeddingModel() {}
+        }
+
+        // Lexical signal alone has zero overlap with "wake me up at dawn" if we use "rooster crowing"
+        val paraphraseReq = IntentRequest(
+            requestId = "sem-1",
+            rawUtterance = "Wake me up before sunrise",
+            issuedAtEpochMs = 100L
+        )
+        assertFalse(pruner.pruneWithSignal(paraphraseReq, allTools).hasActionIntent)
+
+        val boosted = pruner.pruneWithSemanticBoost(
+            request = paraphraseReq,
+            availableTools = allTools,
+            embeddingPort = fakeEmbeddingPort
+        )
+        assertTrue(boosted.hasActionIntent)
+        assertEquals("set_alarm", boosted.tools.first().name)
+        assertEquals(allTools.size, docEmbedCalls)
+
+        // Second call reuses cached tool embeddings
+        pruner.pruneWithSemanticBoost(
+            request = paraphraseReq,
+            availableTools = allTools,
+            embeddingPort = fakeEmbeddingPort
+        )
+        assertEquals(allTools.size, docEmbedCalls)
+
+        // Pure chat query with cosine < 0.42 stays non-action
+        val chatResult = pruner.pruneWithSemanticBoost(
+            request = IntentRequest("sem-chat", "Explain photosynthesis briefly", issuedAtEpochMs = 200L),
+            availableTools = allTools,
+            embeddingPort = fakeEmbeddingPort
+        )
+        assertFalse(chatResult.hasActionIntent)
+        assertTrue(chatResult.tools.isEmpty())
     }
 }

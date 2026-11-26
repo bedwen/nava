@@ -20,12 +20,16 @@ enum class NavaDestination(
         showInBottomBar = true
     ),
     PROFILES(
-        labelResId = R.string.nav_profile,
+        labelResId = R.string.nav_permissions,
         showInBottomBar = true
     ),
-    ROUTINES(
-        labelResId = R.string.nav_routines,
+    VAULT(
+        labelResId = R.string.nav_my_day,
         showInBottomBar = true
+    ),
+    AUDIT_LOG(
+        labelResId = R.string.nav_audit,
+        showInBottomBar = false
     ),
     SETTINGS(
         labelResId = R.string.nav_settings,
@@ -35,8 +39,8 @@ enum class NavaDestination(
     companion object {
         val BOTTOM_BAR_DESTINATIONS: List<NavaDestination> = listOf(
             HUB,
+            VAULT,
             PROFILES,
-            ROUTINES,
             SETTINGS
         )
     }

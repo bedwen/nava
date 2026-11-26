@@ -15,6 +15,26 @@ data class StoredNote(
 }
 
 /**
+ * Ranked in-memory search hit returned by [NoteStoragePort.searchNotes].
+ *
+ * Security invariant: Search executes strictly in memory over decrypted standard notes;
+ * zero plaintext search index is persisted to disk, and locked `NavaVault` entries are never read.
+ */
+data class NoteSearchHit(
+    val note: StoredNote,
+    val score: Double,
+    val excerpt: String
+)
+
+/**
+ * Optional pluggable semantic re-ranker interface (e.g., for an opt-in EmbeddingGemma add-on).
+ * Default deployments pass `null` and rely on 0 MB in-memory lexical/BM25 scoring.
+ */
+interface NoteSemanticRankerPort {
+    suspend fun rerank(query: String, candidates: List<NoteSearchHit>, limit: Int): List<NoteSearchHit>
+}
+
+/**
  * Port for standard encrypted local notes stored via `EncryptedSqliteStore` (`encrypted_notes`).
  *
  * Unlike [VaultPort], notes persisted through this port are encrypted under `nava_db_master_key`
@@ -32,4 +52,9 @@ interface NoteStoragePort {
 
     /** Deletes the note identified by [noteId]; returns true if a note was removed. */
     suspend fun deleteNote(noteId: String): Boolean
+
+    /**
+     * Searches standard encrypted notes in memory without persisting any plaintext search index.
+     */
+    suspend fun searchNotes(query: String, limit: Int = 3): List<NoteSearchHit> = emptyList()
 }

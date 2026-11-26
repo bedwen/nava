@@ -25,11 +25,19 @@ import com.nava.domain.locale.DetectedLanguage
 import com.nava.domain.locale.GenericTextNormalizer
 import com.nava.domain.locale.LocaleRulePack
 import com.nava.domain.locale.ScriptFamily
+import com.nava.domain.security.AtomicCapability
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.domain.security.Tainted
+import com.nava.domain.tool.SlotValueType
+import com.nava.domain.tool.ToolCategory
+import com.nava.domain.tool.ToolMetadata
+import com.nava.domain.tool.ToolSchemaField
 import com.nava.domain.ui.MessageKey
 import com.nava.domain.usecase.ProcessQueryUseCase
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -580,6 +588,225 @@ class ThreeTierHybridRouterTest {
             allTools
         ) as ResolutionResult.ResolvedPlan
         assertEquals("context-B", ctxReplay.plan.calls.single().targetId)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun gemmaIntentResolverCoalescesStreamingChatDeltasAt35msAndEmitsFinalText() = runTest {
+        val gb = 1024L * 1024L * 1024L
+        val hardware = FakeHardwareStatusProvider(
+            DeviceHardwareSnapshot(8L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 90)
+        )
+        val lifecycle = ThermalModelLifecycleManager(hardware, backgroundScope)
+        val runtime = FakeLiteRtRuntimeAdapter()
+        val engine = LiteRtLlmEngine(
+            modelPathProvider = { fakeModelFile.absolutePath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = runtime
+        )
+        var clockMs = 1000L
+        val resolver = GemmaIntentResolver(
+            llmEngine = engine,
+            lifecycleManager = lifecycle,
+            securityFirewall = FakeSecurityFirewallPort(),
+            monotonicClockMs = {
+                val now = clockMs
+                clockMs += 10L
+                now
+            }
+        )
+
+        runtime.enqueueDeltas(
+            listOf(
+                RuntimeStreamDelta(outputDelta = "Hello "),
+                RuntimeStreamDelta(outputDelta = "there, "),
+                RuntimeStreamDelta(outputDelta = "this "),
+                RuntimeStreamDelta(outputDelta = "is "),
+                RuntimeStreamDelta(outputDelta = "Nava.")
+            )
+        )
+
+        val collected = mutableListOf<ChatStreamDelta>()
+        val collectJob = launch(UnconfinedTestDispatcher(testScheduler)) {
+            resolver.streamingChatDeltas.collect { collected.add(it) }
+        }
+
+        val reply = resolver.resolve(
+            IntentRequest("chat-stream-1", "How are you doing today?", issuedAtEpochMs = 100L),
+            allTools
+        ) as ResolutionResult.ConversationalReply
+
+        collectJob.cancel()
+
+        assertEquals("Hello there, this is Nava.", reply.replyText)
+        // Throttled intermediate deltas + final completion guarantee
+        assertTrue(collected.size in 2..3)
+        assertEquals("Hello there, this is Nava.", collected.last().accumulatedText)
+    }
+
+    @Test
+    fun tier1LayerRRulesMatchScheduleReminderAndSummarizeNotificationsInEnAndTr() = runTest {
+        val reminderTool = ToolMetadata(
+            name = "schedule_reminder",
+            displayNameKey = "tool_schedule_reminder",
+            description = "Schedule an offline reminder",
+            category = ToolCategory.TIME_CALENDAR,
+            requiredCapability = AtomicCapability.CREATE_DRAFT,
+            fields = listOf(
+                ToolSchemaField("title", "Title", true, SensitiveSlotKind.EVENT_TITLE, SlotValueType.STRING),
+                ToolSchemaField("delay_minutes", "Delay min", false, SensitiveSlotKind.DURATION, SlotValueType.INTEGER)
+            )
+        )
+        val notifyTool = ToolMetadata(
+            name = "summarize_notifications",
+            displayNameKey = "tool_summarize_notifications",
+            description = "Summarize recent notifications",
+            category = ToolCategory.COMMUNICATION,
+            requiredCapability = AtomicCapability.NOTIFICATION_READ,
+            fields = listOf(
+                ToolSchemaField("limit", "Limit", false, SensitiveSlotKind.DURATION, SlotValueType.INTEGER)
+            )
+        )
+        val extendedTools = allTools + reminderTool + notifyTool
+        val firewall = FakeSecurityFirewallPort()
+        val resolver = RuleIntentResolver(rulePackLoader, firewall, normalizer, timeResolver, { ZoneOffset.UTC })
+
+        val enRem = resolver.resolve(
+            IntentRequest(
+                requestId = "en-rem",
+                rawUtterance = "Remind me in 15 minutes to call mom",
+                normalizedText = normalizer.normalize("Remind me in 15 minutes to call mom", "en"),
+                languageHint = DetectedLanguage("en", 0.99f, ScriptFamily.LATIN),
+                issuedAtEpochMs = 1_000_000L
+            ),
+            extendedTools
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals("schedule_reminder", enRem.plan.calls.single().toolName)
+        assertEquals(SlotValueAst.IntValue(15L), enRem.plan.calls.single().arguments.getValue("delay_minutes").value)
+        assertEquals(SlotValueAst.StringValue("call mom"), enRem.plan.calls.single().arguments.getValue("title").value)
+
+        val trRem = resolver.resolve(
+            IntentRequest(
+                requestId = "tr-rem",
+                rawUtterance = "10 dakika sonra ilac icmeyi hatirlat",
+                normalizedText = normalizer.normalize("10 dakika sonra ilac icmeyi hatirlat", "tr"),
+                languageHint = DetectedLanguage("tr", 0.99f, ScriptFamily.LATIN),
+                issuedAtEpochMs = 1_000_000L
+            ),
+            extendedTools
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals("schedule_reminder", trRem.plan.calls.single().toolName)
+        assertEquals(SlotValueAst.IntValue(10L), trRem.plan.calls.single().arguments.getValue("delay_minutes").value)
+        assertEquals(SlotValueAst.StringValue("ilac icmeyi"), trRem.plan.calls.single().arguments.getValue("title").value)
+
+        val enNotif = resolver.resolve(
+            IntentRequest(
+                requestId = "en-notif",
+                rawUtterance = "Summarize my unread notifications",
+                normalizedText = normalizer.normalize("Summarize my unread notifications", "en"),
+                languageHint = DetectedLanguage("en", 0.99f, ScriptFamily.LATIN),
+                issuedAtEpochMs = 1_000_000L
+            ),
+            extendedTools
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals("summarize_notifications", enNotif.plan.calls.single().toolName)
+
+        val trNotif = resolver.resolve(
+            IntentRequest(
+                requestId = "tr-notif",
+                rawUtterance = "Son 5 bildirimi \u00F6zetle",
+                normalizedText = normalizer.normalize("Son 5 bildirimi \u00F6zetle", "tr"),
+                languageHint = DetectedLanguage("tr", 0.99f, ScriptFamily.LATIN),
+                issuedAtEpochMs = 1_000_000L
+            ),
+            extendedTools
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals("summarize_notifications", trNotif.plan.calls.single().toolName)
+        assertEquals(SlotValueAst.IntValue(5L), trNotif.plan.calls.single().arguments.getValue("limit").value)
+
+        // Multi-step notification + draft remains NO_MATCH in Tier 1 even with extendedTools
+        val complex = resolver.resolve(
+            IntentRequest(
+                requestId = "en-complex-notif",
+                rawUtterance = "Summarize my unread notifications and draft a reply to Alex",
+                normalizedText = normalizer.normalize("Summarize my unread notifications and draft a reply to Alex", "en"),
+                languageHint = DetectedLanguage("en", 0.99f, ScriptFamily.LATIN),
+                issuedAtEpochMs = 1_000_000L
+            ),
+            extendedTools
+        )
+        assertEquals(ResolutionResult.NoMatch, complex)
+    }
+
+    @Test
+    fun processQueryUseCaseRoutesT1ToT2ToT25FunctionGemmaBeforeT3() = runTest {
+        val gb = 1024L * 1024L * 1024L
+        val hardware = FakeHardwareStatusProvider(
+            DeviceHardwareSnapshot(8L * gb, ThermalModelLifecycleManager.THERMAL_STATUS_NONE, 90)
+        )
+        val lifecycle = ThermalModelLifecycleManager(hardware, backgroundScope)
+        val fgRuntime = FakeLiteRtRuntimeAdapter()
+        val gemmaRuntime = FakeLiteRtRuntimeAdapter()
+        val fgEngine = LiteRtLlmEngine(
+            modelPathProvider = { fakeModelFile.absolutePath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = fgRuntime
+        )
+        val gemmaEngine = LiteRtLlmEngine(
+            modelPathProvider = { fakeModelFile.absolutePath },
+            lifecycleManager = lifecycle,
+            runtimeAdapter = gemmaRuntime
+        )
+        val firewall = FakeSecurityFirewallPort()
+        val cachePort = InMemoryActionCachePort()
+        val tier1 = RuleIntentResolver(rulePackLoader, firewall, normalizer, timeResolver, { ZoneOffset.UTC })
+        val tier2 = CacheIntentResolver(cachePort, firewall, normalizer)
+        val tier25 = FunctionGemmaIntentResolver(
+            functionEngine = fgEngine,
+            isModelAvailable = { true },
+            lifecycleManager = lifecycle,
+            securityFirewall = firewall
+        )
+        val tier3 = GemmaIntentResolver(gemmaEngine, lifecycle, securityFirewall = firewall)
+        val detector = OnDeviceLanguageDetector(catalog, textNormalizer = normalizer)
+
+        val useCase = ProcessQueryUseCase(
+            resolvers = listOf(tier3, tier25, tier1, tier2),
+            toolRegistry = CoreAiTestFixtures.canonicalToolRegistry(),
+            languageDetector = detector,
+            textNormalizer = normalizer
+        )
+
+        fgRuntime.enqueueDeltas(
+            listOf(
+                RuntimeStreamDelta(
+                    outputDelta = "<start_function_call>call:set_alarm{time:<escape>06:30<escape>}<end_function_call>"
+                )
+            )
+        )
+        val res25 = useCase(
+            requestId = "u-fg",
+            rawUtterance = "Wake me up with an alarm at 06:30 please",
+            appLocaleTag = "en",
+            issuedAtEpochMs = 1_000_000L
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals(ResolutionTier.TIER_2_5_FUNCTION_GEMMA, res25.tier)
+        assertEquals(1, fgRuntime.clonedTurnCalls.size)
+        assertEquals(0, gemmaRuntime.clonedTurnCalls.size)
+
+        // When FunctionGemma returns NO_FUNCTION_CALL, falls back to Tier 3 Gemma
+        fgRuntime.enqueueDeltas(listOf(RuntimeStreamDelta(outputDelta = "NO_FUNCTION_CALL")))
+        gemmaRuntime.enqueueDeltas(
+            listOf(RuntimeStreamDelta(outputDelta = "<|tool_call>call:set_dnd{enabled:true}<tool_call|>"))
+        )
+        val res3 = useCase(
+            requestId = "u-t3",
+            rawUtterance = "Please activate do not disturb focus mode for me",
+            appLocaleTag = "en",
+            issuedAtEpochMs = 2_000_000L
+        ) as ResolutionResult.ResolvedPlan
+        assertEquals(ResolutionTier.TIER_3_GEMMA, res3.tier)
+        assertEquals(1, gemmaRuntime.clonedTurnCalls.size)
     }
 
     private fun assertCanonicalSlots(

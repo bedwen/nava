@@ -4,8 +4,11 @@ import com.nava.domain.ai.SlotValueAst
 import com.nava.domain.security.AtomicCapability
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.AuditLogPort
+import com.nava.domain.security.ConfirmationLevel
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.FirewallDecision
+import com.nava.domain.security.PermissionEvaluatorPort
+import com.nava.domain.security.PermissionProfile
 import com.nava.domain.security.SecurityFirewallPort
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.domain.security.Tainted
@@ -35,7 +38,8 @@ class AppLaunchTool(
     private val intentGateway: AutomationIntentGateway,
     private val firewall: SecurityFirewallPort,
     private val auditLog: AuditLogPort,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val permissionEvaluator: PermissionEvaluatorPort? = null
 ) : NavaTool {
 
     override val metadata: ToolMetadata = ToolMetadata(
@@ -89,10 +93,13 @@ class AppLaunchTool(
             }
         }
 
-        val taintedTarget = ToolArgumentReader.getString(arguments, "package_name")
-            ?: ToolArgumentReader.getString(arguments, "app_name")
+        val pkgArg = ToolArgumentReader.getString(arguments, "package_name")
+        val nameArg = ToolArgumentReader.getString(arguments, "app_name")
 
-        if (taintedTarget == null || taintedTarget.value.isBlank()) {
+        val pkgCandidate = pkgArg?.value?.takeIf { it.isNotBlank() }
+        val nameCandidate = nameArg?.value?.takeIf { it.isNotBlank() }
+
+        if (pkgCandidate == null && nameCandidate == null) {
             val failure = ToolArgumentReader.invalidArgumentsFailure("Missing app_name or package_name")
             auditLog.record(
                 AuditLogEntry(
@@ -107,15 +114,34 @@ class AppLaunchTool(
             return failure
         }
 
-        val resolvedPackage = intentGateway.resolveLaunchablePackage(taintedTarget.value)
-        if (resolvedPackage == null) {
-            val failure = ToolArgumentReader.notFoundFailure(taintedTarget.value)
+        var resolvedPackage: String? = null
+        var matchedTainted: Tainted<String>? = null
+
+        if (pkgCandidate != null) {
+            val resolved = intentGateway.resolveLaunchablePackage(pkgCandidate)
+            if (resolved != null) {
+                resolvedPackage = resolved
+                matchedTainted = pkgArg
+            }
+        }
+
+        if (resolvedPackage == null && nameCandidate != null) {
+            val resolved = intentGateway.resolveLaunchablePackage(nameCandidate)
+            if (resolved != null) {
+                resolvedPackage = resolved
+                matchedTainted = nameArg
+            }
+        }
+
+        if (resolvedPackage == null || matchedTainted == null) {
+            val attemptedTarget = pkgCandidate ?: nameCandidate.orEmpty()
+            val failure = ToolArgumentReader.notFoundFailure(attemptedTarget)
             auditLog.record(
                 AuditLogEntry(
                     timestampEpochMs = nowMs,
                     toolName = metadata.name,
                     targetId = ToolTargetIds.APP_LAUNCH,
-                    actionSummary = "App target not found: '${taintedTarget.value}'",
+                    actionSummary = "App target not found: '$attemptedTarget'",
                     provenance = worstProvenance,
                     decision = failure.errorCode
                 )
@@ -123,16 +149,107 @@ class AppLaunchTool(
             return failure
         }
 
-        val targetId = ToolTargetIds.forPackage(resolvedPackage)
-        val taintedPackage = taintedTarget.map { resolvedPackage }
+        val baseTainted = if (pkgArg != null && nameArg != null) {
+            pkgArg.combineWith(nameArg) { _, _ -> resolvedPackage }
+        } else {
+            matchedTainted.map { resolvedPackage }
+        }
+        val taintedPackage = baseTainted.withSlotKind(SensitiveSlotKind.PACKAGE_NAME)
+        val pkgTargetId = ToolTargetIds.forPackage(resolvedPackage)
+
+        val effectiveTargetId: String
+        val capabilityLevel: ConfirmationLevel
+        if (permissionEvaluator != null) {
+            val profile = permissionEvaluator.getProfileForTarget(pkgTargetId)
+            val allProfiles = permissionEvaluator.listProfiles()
+            val defaultDeny = allProfiles.firstOrNull { it.id == PermissionProfile.DEFAULT_DENY_PROFILE_ID }
+            val isExplicitlyBound = (profile.id != PermissionProfile.DEFAULT_DENY_PROFILE_ID) ||
+                (defaultDeny?.assignedTargets?.contains(pkgTargetId) == true)
+
+            effectiveTargetId = if (isExplicitlyBound) pkgTargetId else ToolTargetIds.APP_LAUNCH
+            capabilityLevel = permissionEvaluator.evaluateCapability(effectiveTargetId, AtomicCapability.APP_LAUNCH)
+        } else {
+            effectiveTargetId = pkgTargetId
+            capabilityLevel = ConfirmationLevel.AUTO
+        }
+
+        if (capabilityLevel == ConfirmationLevel.DISABLED) {
+            auditLog.record(
+                AuditLogEntry(
+                    timestampEpochMs = nowMs,
+                    toolName = metadata.name,
+                    targetId = effectiveTargetId,
+                    actionSummary = "App launch access disabled for $effectiveTargetId",
+                    provenance = worstProvenance,
+                    decision = "PERMISSION_DENIED"
+                )
+            )
+            return ToolResult.Failure(
+                message = UserMessage(
+                    key = MessageKey.ERROR_PERMISSION_DENIED,
+                    args = listOf(MessageArg.Text(effectiveTargetId))
+                ),
+                errorCode = "PERMISSION_DENIED",
+                isSecurityViolation = true
+            )
+        }
+
+        val hasUntrustedHighRisk = taintedPackage.isUntrusted || arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
+
+        if (capabilityLevel != ConfirmationLevel.AUTO) {
+            if (context.isUnattendedBackground) {
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = effectiveTargetId,
+                        actionSummary = "Unattended app launch forbidden for $effectiveTargetId with level $capabilityLevel",
+                        provenance = worstProvenance,
+                        decision = "UNATTENDED_EXECUTION_FORBIDDEN"
+                    )
+                )
+                return ToolResult.Failure(
+                    message = UserMessage(
+                        key = MessageKey.ERROR_SECURITY_VIOLATION,
+                        args = listOf(MessageArg.Text(effectiveTargetId))
+                    ),
+                    errorCode = "UNATTENDED_EXECUTION_FORBIDDEN",
+                    isSecurityViolation = true
+                )
+            }
+
+            if (!userConfirmed) {
+                auditLog.record(
+                    AuditLogEntry(
+                        timestampEpochMs = nowMs,
+                        toolName = metadata.name,
+                        targetId = effectiveTargetId,
+                        actionSummary = "App launch requires user confirmation for $effectiveTargetId",
+                        provenance = worstProvenance,
+                        decision = "CONFIRMATION_REQUIRED"
+                    )
+                )
+                return ToolResult.ConfirmationRequired(
+                    message = UserMessage(
+                        key = MessageKey.ACTION_CONFIRMATION_REQUIRED,
+                        args = listOf(MessageArg.Text(resolvedPackage))
+                    ),
+                    pendingToolName = metadata.name,
+                    targetId = effectiveTargetId,
+                    canonicalArguments = mapOf("package_name" to taintedPackage),
+                    requiresBiometric = (capabilityLevel == ConfirmationLevel.BIOMETRIC),
+                    hasUntrustedHighRiskSlot = hasUntrustedHighRisk
+                )
+            }
+        }
+
+        val targetId = effectiveTargetId
 
         val firewallDecision = firewall.validateOutboundTarget(
             toolName = metadata.name,
             action = AutomationOutboundActions.ACTION_APP_LAUNCH,
             uriOrTarget = taintedPackage
         )
-
-        val hasUntrustedHighRisk = taintedPackage.isUntrusted || arguments.values.any { it.isUntrusted && it.slotKind?.isHighRisk == true }
 
         when (firewallDecision) {
             is FirewallDecision.Denied -> {

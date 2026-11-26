@@ -2,7 +2,11 @@ package com.nava.app.ui.routines
 
 import androidx.lifecycle.ViewModel
 import com.nava.app.di.AppContainer
+import com.nava.domain.automation.MorningBriefingConfig
+import com.nava.domain.automation.NotificationWatcher
+import com.nava.domain.automation.ReminderStatus
 import com.nava.domain.automation.RoutineExecutionOutcome
+import com.nava.domain.automation.ScheduledReminder
 import com.nava.domain.security.AtomicCapability
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.RuleActionSpec
@@ -70,6 +74,9 @@ data class RoutinesUiState(
     val revokedRules: List<RuleCapabilityGrant> = emptyList(),
     val consentCards: List<RoutineConsentCardModel> = emptyList(),
     val isGlobalPaused: Boolean = false,
+    val morningBriefingConfig: MorningBriefingConfig = MorningBriefingConfig(),
+    val activeReminders: List<ScheduledReminder> = emptyList(),
+    val notificationWatchers: List<NotificationWatcher> = emptyList(),
     val lastExecutionOutcome: RoutineExecutionOutcome? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null
@@ -89,7 +96,8 @@ class RoutinesViewModel(
 
     private val _uiState = MutableStateFlow(
         RoutinesUiState(
-            isGlobalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused()
+            isGlobalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused(),
+            morningBriefingConfig = container.morningBriefingPreferencesStore.currentConfig()
         )
     )
     val uiState: StateFlow<RoutinesUiState> = _uiState.asStateFlow()
@@ -108,6 +116,10 @@ class RoutinesViewModel(
             val revoked = rules.filter { it.approvalState == RuleApprovalState.REVOKED }
             val consentModels = rules.map(::buildRoutineConsentCardModel)
             val globalPaused = container.ruleCapabilityGrantManager.isGlobalRulesPaused()
+            val activeReminders = container.scheduledReminderDao.listActiveReminders()
+            val briefingConfig = container.morningBriefingPreferencesStore.currentConfig()
+            val watchers = runCatching { container.notificationWatcherDao.listWatchers() }
+                .getOrDefault(emptyList())
 
             _uiState.update { state ->
                 state.copy(
@@ -117,9 +129,69 @@ class RoutinesViewModel(
                     pausedRules = paused,
                     revokedRules = revoked,
                     consentCards = consentModels,
-                    isGlobalPaused = globalPaused
+                    isGlobalPaused = globalPaused,
+                    morningBriefingConfig = briefingConfig,
+                    activeReminders = activeReminders,
+                    notificationWatchers = watchers
                 )
             }
+        }
+    }
+
+    fun createNotificationWatcher(
+        label: String,
+        keywordsRaw: String,
+        sender: String,
+        appFilter: String
+    ) {
+        val keywords = keywordsRaw
+            .split(',', ';', '|')
+            .map { com.nava.domain.security.Gemma4InputSanitizer.sanitize(it).trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(10)
+        val cleanSender = com.nava.domain.security.Gemma4InputSanitizer.sanitize(sender)
+            .trim().takeIf { it.isNotEmpty() }
+        val cleanApp = com.nava.domain.security.Gemma4InputSanitizer.sanitize(appFilter)
+            .trim().takeIf { it.isNotEmpty() }
+        if (keywords.isEmpty() && cleanSender == null) return
+
+        val cleanLabel = com.nava.domain.security.Gemma4InputSanitizer.sanitize(label)
+            .trim()
+            .ifBlank {
+                listOfNotNull(
+                    cleanSender,
+                    keywords.take(3).joinToString(", ").takeIf { it.isNotEmpty() }
+                ).joinToString(" - ")
+            }
+            .take(60)
+        vmScope.launch {
+            val now = clockMs()
+            val watcher = NotificationWatcher(
+                watcherId = "watch_${java.util.UUID.randomUUID().toString().replace("-", "").take(12)}",
+                label = cleanLabel,
+                keywords = keywords,
+                senderFilter = cleanSender,
+                packageFilter = cleanApp,
+                enabled = true,
+                createdAtEpochMs = now
+            )
+            container.notificationWatcherDao.saveWatcher(watcher)
+            refreshRules()
+        }
+    }
+
+    fun setNotificationWatcherEnabled(watcherId: String, enabled: Boolean) {
+        vmScope.launch {
+            container.notificationWatcherDao.setWatcherEnabled(watcherId, enabled)
+            refreshRules()
+        }
+    }
+
+    fun deleteNotificationWatcher(watcherId: String) {
+        vmScope.launch {
+            container.notificationWatcherDao.deleteWatcher(watcherId)
+            refreshRules()
         }
     }
 
@@ -273,6 +345,87 @@ class RoutinesViewModel(
             _uiState.update { state ->
                 state.copy(isGlobalPaused = paused, errorMessage = null)
             }
+            refreshRules()
+        }
+    }
+
+    fun setMorningBriefingEnabled(enabled: Boolean) {
+        val updated = container.morningBriefingPreferencesStore.updateConfig { it.copy(enabled = enabled) }
+        val scheduleError: String? = if (enabled) {
+            val scheduledAt = container.reminderAlarmScheduler.scheduleMorningBriefing(
+                hour = updated.hour,
+                minute = updated.minute,
+                nowEpochMs = clockMs()
+            )
+            if (scheduledAt == null) "Unable to schedule Morning Briefing alarm" else null
+        } else {
+            container.reminderAlarmScheduler.cancelMorningBriefing()
+            null
+        }
+        _uiState.update { it.copy(morningBriefingConfig = updated, errorMessage = scheduleError) }
+    }
+
+    fun setMorningBriefingTime(hour: Int, minute: Int) {
+        val normalizedHour = ((hour % 24) + 24) % 24
+        val normalizedMinute = ((minute % 60) + 60) % 60
+        val updated = container.morningBriefingPreferencesStore.updateConfig {
+            it.copy(hour = normalizedHour, minute = normalizedMinute)
+        }
+        val scheduleError: String? = if (updated.enabled) {
+            val scheduledAt = container.reminderAlarmScheduler.scheduleMorningBriefing(
+                hour = updated.hour,
+                minute = updated.minute,
+                nowEpochMs = clockMs()
+            )
+            if (scheduledAt == null) "Unable to reschedule Morning Briefing alarm" else null
+        } else {
+            null
+        }
+        _uiState.update { it.copy(morningBriefingConfig = updated, errorMessage = scheduleError) }
+    }
+
+    fun setMorningBriefingAiSummary(enabled: Boolean) {
+        val updated = container.morningBriefingPreferencesStore.updateConfig {
+            it.copy(aiSummaryEnabled = enabled)
+        }
+        _uiState.update { it.copy(morningBriefingConfig = updated, errorMessage = null) }
+    }
+
+    fun setMorningBriefingSources(
+        includeCalendar: Boolean? = null,
+        includeNotifications: Boolean? = null,
+        includeReminders: Boolean? = null
+    ) {
+        val updated = container.morningBriefingPreferencesStore.updateConfig { current ->
+            current.copy(
+                includeCalendar = includeCalendar ?: current.includeCalendar,
+                includeNotifications = includeNotifications ?: current.includeNotifications,
+                includeReminders = includeReminders ?: current.includeReminders
+            )
+        }
+        _uiState.update { it.copy(morningBriefingConfig = updated, errorMessage = null) }
+    }
+
+    fun completeReminder(reminderId: String) {
+        vmScope.launch {
+            container.scheduledReminderDao.updateStatus(
+                reminderId = reminderId,
+                status = ReminderStatus.COMPLETED,
+                updatedAtEpochMs = clockMs()
+            )
+            container.reminderAlarmScheduler.cancelReminder(reminderId)
+            refreshRules()
+        }
+    }
+
+    fun cancelReminder(reminderId: String) {
+        vmScope.launch {
+            container.scheduledReminderDao.updateStatus(
+                reminderId = reminderId,
+                status = ReminderStatus.CANCELLED,
+                updatedAtEpochMs = clockMs()
+            )
+            container.reminderAlarmScheduler.cancelReminder(reminderId)
             refreshRules()
         }
     }

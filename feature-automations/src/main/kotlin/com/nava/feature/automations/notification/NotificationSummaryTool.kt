@@ -20,9 +20,59 @@ import com.nava.domain.tool.ToolSchemaField
 import com.nava.domain.ui.MessageArg
 import com.nava.domain.ui.MessageKey
 import com.nava.domain.ui.UserMessage
+import com.nava.feature.automations.common.AutomationIntentGateway
 import com.nava.feature.automations.common.AutomationToolNames
 import com.nava.feature.automations.common.ToolArgumentReader
 import com.nava.feature.automations.common.ToolTargetIds
+import java.text.Normalizer
+import java.util.Locale
+
+/**
+ * Deterministic, locale-agnostic urgency bucket for captured notifications.
+ *
+ * Security invariant: Urgency classification is strictly a display grouping heuristic and
+ * NEVER elevates provenance above [DataProvenance.UNTRUSTED_EXTERNAL] or triggers tools.
+ */
+enum class NotificationUrgency {
+    URGENT,
+    INFO,
+    NOISE
+}
+
+/**
+ * Lightweight, zero-LLM notification urgency classifier used by [NotificationSummaryTool] and
+ * `DailyBriefingBuilder`.
+ */
+object NotificationUrgencyClassifier {
+    private val OTP_REGEX = Regex("\\b\\d{4,8}\\b")
+
+    private val URGENT_KEYWORDS = setOf(
+        "otp", "code", "verify", "verification", "security", "alert", "urgent",
+        "bank", "payment", "delivery", "missed call", "calendar", "meeting"
+    )
+
+    private val NOISE_KEYWORDS = setOf(
+        "sale", "discount", "offer", "promo", "coupon", "newsletter", "deal"
+    )
+
+    fun classify(packageName: String, title: String, body: String): NotificationUrgency {
+        val combined = "$title $body".lowercase(Locale.ROOT)
+        if (OTP_REGEX.containsMatchIn(combined) || URGENT_KEYWORDS.any { combined.contains(it) }) {
+            return NotificationUrgency.URGENT
+        }
+        if (NOISE_KEYWORDS.any { combined.contains(it) }) {
+            return NotificationUrgency.NOISE
+        }
+        val pkgLower = packageName.lowercase(Locale.ROOT)
+        if (pkgLower.contains("messaging") || pkgLower.contains("whatsapp") ||
+            pkgLower.contains("signal") || pkgLower.contains("telegram") ||
+            pkgLower.contains("dialer") || pkgLower.contains("calendar")
+        ) {
+            return NotificationUrgency.URGENT
+        }
+        return NotificationUrgency.INFO
+    }
+}
 
 /**
  * [NavaTool] adapter for summarizing recent notifications captured from permitted applications.
@@ -38,7 +88,8 @@ import com.nava.feature.automations.common.ToolTargetIds
 class NotificationSummaryTool(
     private val inbox: NotificationInboxPort,
     private val permissionEvaluator: PermissionEvaluatorPort,
-    private val auditLog: AuditLogPort
+    private val auditLog: AuditLogPort,
+    private val intentGateway: AutomationIntentGateway? = null
 ) : NavaTool {
 
     override val metadata: ToolMetadata = ToolMetadata(
@@ -51,9 +102,9 @@ class NotificationSummaryTool(
         fields = listOf(
             ToolSchemaField(
                 name = "package_name",
-                description = "Optional package name filter",
+                description = "Optional application name or package filter (omit to read all permitted apps)",
                 required = false,
-                slotKind = SensitiveSlotKind.PACKAGE_NAME,
+                slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
             ),
             ToolSchemaField(
@@ -78,21 +129,35 @@ class NotificationSummaryTool(
         context: ToolExecutionContext,
         arguments: Map<String, Tainted<SlotValueAst>>
     ): ToolResult {
-        val packageName = ToolArgumentReader.getString(arguments, "package_name")?.value
-        val limit = ToolArgumentReader.getInt(arguments, "limit")?.value
-            ?: NotificationInboxPort.DEFAULT_LIMIT
+        val rawPackageArg = ToolArgumentReader.getString(arguments, "package_name")?.value?.trim()?.takeIf { it.isNotEmpty() }
+        val limit = (ToolArgumentReader.getInt(arguments, "limit")?.value
+            ?: NotificationInboxPort.DEFAULT_LIMIT)
+            .coerceIn(1, MAX_SUMMARY_LIMIT)
         val sinceEpochMs = ToolArgumentReader.getLong(arguments, "since_epoch_ms")?.value
 
-        if (packageName != null) {
-            val targetId = ToolTargetIds.forPackage(packageName)
-            val level = permissionEvaluator.evaluateCapability(targetId, AtomicCapability.NOTIFICATION_READ)
-            if (!level.isAllowed) {
+        NotificationServiceBinding.requestActiveNotificationsResync()
+
+        val resolvedPackages: Set<String>? = if (rawPackageArg != null) {
+            resolvePackageFilter(rawPackageArg)
+        } else {
+            null
+        }
+
+        if (resolvedPackages != null && resolvedPackages.isNotEmpty()) {
+            val anyAllowed = resolvedPackages.any { pkg ->
+                permissionEvaluator.evaluateCapability(
+                    ToolTargetIds.forPackage(pkg),
+                    AtomicCapability.NOTIFICATION_READ
+                ).isAllowed
+            }
+            if (!anyAllowed) {
+                val primaryTarget = ToolTargetIds.forPackage(resolvedPackages.first())
                 auditLog.record(
                     AuditLogEntry(
                         timestampEpochMs = context.issuedAtEpochMs,
                         toolName = metadata.name,
-                        targetId = targetId,
-                        actionSummary = "Notification summary access denied for package $packageName",
+                        targetId = primaryTarget,
+                        actionSummary = "Notification summary access denied for package ${resolvedPackages.first()}",
                         provenance = DataProvenance.SYSTEM,
                         decision = "PERMISSION_DENIED"
                     )
@@ -100,7 +165,7 @@ class NotificationSummaryTool(
                 return ToolResult.Failure(
                     message = UserMessage(
                         key = MessageKey.ERROR_PERMISSION_DENIED,
-                        args = listOf(MessageArg.Text(packageName))
+                        args = listOf(MessageArg.Text(resolvedPackages.first()))
                     ),
                     errorCode = "PERMISSION_DENIED",
                     isSecurityViolation = true
@@ -108,7 +173,7 @@ class NotificationSummaryTool(
             }
         }
 
-        val packageFilter = if (packageName != null) setOf(packageName) else null
+        val packageFilter = resolvedPackages?.takeIf { it.isNotEmpty() }
         val candidates = inbox.listRecent(
             packageFilter = packageFilter,
             sinceEpochMs = sinceEpochMs,
@@ -122,35 +187,75 @@ class NotificationSummaryTool(
         }
 
         if (permitted.isEmpty()) {
+            val hasAnyPermittedNotificationTarget = if (packageFilter != null) {
+                true
+            } else {
+                permissionEvaluator.listProfiles().any { profile ->
+                    profile.levelFor(AtomicCapability.NOTIFICATION_READ).isAllowed &&
+                        profile.assignedTargets.any { isAppPackageTarget(it) }
+                }
+            }
+            val emptyMessageKey = if (hasAnyPermittedNotificationTarget) {
+                MessageKey.ACTION_NOTIFICATIONS_EMPTY
+            } else {
+                MessageKey.INFO_NO_PERMITTED_NOTIFICATION_APPS
+            }
             auditLog.record(
                 AuditLogEntry(
                     timestampEpochMs = context.issuedAtEpochMs,
                     toolName = metadata.name,
                     targetId = context.targetId,
-                    actionSummary = "Summarized 0 notifications",
+                    actionSummary = if (hasAnyPermittedNotificationTarget) {
+                        "Summarized 0 notifications"
+                    } else {
+                        "No apps have NOTIFICATION_READ permission"
+                    },
                     provenance = DataProvenance.UNTRUSTED_EXTERNAL,
                     decision = "SUCCESS"
                 )
             )
             return ToolResult.Success(
-                message = UserMessage(MessageKey.ACTION_NOTIFICATIONS_EMPTY),
+                message = UserMessage(emptyMessageKey),
                 outputValues = mapOf(
                     "count" to "0",
-                    "summary" to ""
+                    "summary" to "",
+                    "has_permitted_apps" to hasAnyPermittedNotificationTarget.toString()
                 ),
                 outputProvenance = DataProvenance.UNTRUSTED_EXTERNAL
             )
         }
 
-        val summaryBuilder = StringBuilder()
+        val grouped = LinkedHashMap<NotificationUrgency, MutableList<String>>(3)
         for (item in permitted) {
             val cleanTitle = Gemma4InputSanitizer.sanitize(item.title.value)
+                .replace('\r', ' ')
+                .replace('\n', ' ')
+                .trim()
             val cleanBody = Gemma4InputSanitizer.sanitize(item.body.value)
+                .replace('\r', ' ')
+                .replace('\n', ' ')
+                .trim()
+            val urgency = NotificationUrgencyClassifier.classify(item.packageName, cleanTitle, cleanBody)
+            val line = "[${item.packageName}] $cleanTitle: $cleanBody"
+            grouped.getOrPut(urgency) { ArrayList() }.add(line)
+        }
+
+        val summaryBuilder = StringBuilder()
+        val orderedBuckets = listOf(
+            NotificationUrgency.URGENT to "[URGENT]",
+            NotificationUrgency.INFO to "[INFO]",
+            NotificationUrgency.NOISE to "[NOISE]"
+        )
+        for ((bucket, header) in orderedBuckets) {
+            val lines = grouped[bucket].orEmpty()
+            if (lines.isEmpty()) continue
             if (summaryBuilder.isNotEmpty()) {
                 summaryBuilder.append("\n")
             }
-            summaryBuilder.append("[").append(item.packageName).append("] ")
-            summaryBuilder.append(cleanTitle).append(": ").append(cleanBody)
+            summaryBuilder.append(header)
+            for (line in lines) {
+                summaryBuilder.append("\n").append(line)
+            }
         }
         val summaryText = summaryBuilder.toString()
 
@@ -176,5 +281,51 @@ class NotificationSummaryTool(
             ),
             outputProvenance = DataProvenance.UNTRUSTED_EXTERNAL
         )
+    }
+
+    private fun resolvePackageFilter(rawArg: String): Set<String>? {
+        if ('.' in rawArg) {
+            return setOf(rawArg)
+        }
+        val exactResolved = intentGateway?.resolveLaunchablePackage(rawArg)
+        if (!exactResolved.isNullOrBlank()) {
+            return setOf(exactResolved)
+        }
+        val foldedQuery = foldLabelForMatch(rawArg)
+        if (foldedQuery.isEmpty()) return null
+        val matched = LinkedHashSet<String>()
+        val installed = intentGateway?.listLaunchableApps().orEmpty()
+        for (app in installed) {
+            val foldedLabel = foldLabelForMatch(app.displayLabel)
+            val foldedPkg = app.packageName.lowercase(Locale.ROOT)
+            if (foldedLabel.contains(foldedQuery) || foldedPkg.contains(foldedQuery)) {
+                matched.add(app.packageName)
+            }
+        }
+        return if (matched.isNotEmpty()) matched else null
+    }
+
+    private fun foldLabelForMatch(raw: String): String {
+        val replaced = raw.replace('\u0131', 'i').replace('\u0130', 'I')
+        val decomposed = Normalizer.normalize(replaced, Normalizer.Form.NFKD)
+        val sb = StringBuilder(decomposed.length)
+        for (ch in decomposed) {
+            if (Character.getType(ch) != Character.NON_SPACING_MARK.toInt()) {
+                sb.append(ch.lowercaseChar())
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    private fun isAppPackageTarget(targetId: String): Boolean {
+        val trimmed = targetId.trim()
+        if (trimmed.isEmpty()) return false
+        return !trimmed.startsWith("system.") &&
+            !trimmed.startsWith("nava.") &&
+            !trimmed.startsWith("saf:")
+    }
+
+    companion object {
+        const val MAX_SUMMARY_LIMIT: Int = 50
     }
 }

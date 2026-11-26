@@ -16,6 +16,7 @@ object ToolTargetIds {
     const val NOTIFICATIONS: String = "system.notifications"
     const val SAF: String = "system.saf"
     const val ROUTINES: String = "nava.routines"
+    const val REMINDERS: String = "nava.reminders"
     const val BACKGROUND_TASKS: String = "nava.background_tasks"
 
     /**

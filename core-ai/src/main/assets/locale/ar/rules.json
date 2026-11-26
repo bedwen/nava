@@ -99,6 +99,61 @@
       },
       "staticSlots": {},
       "priority": 100
+    },
+    {
+      "patternId": "ar_schedule_reminder_in_min",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:من فضلك )?ذكرني بعد (\\d{1,4}) (?:دقائق|دقيقه) (?:ب)?(.{1,80})$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "ar_summarize_notifications_limit",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:من فضلك )?(?:اقرا|لخص|اعرض) اخر (\\d{1,2}) (?:اشعارات|اشعار)(?: علي الهاتف| في الهاتف)?$",
+      "slotMappings": {
+        "limit": "1"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "ar_summarize_notifications",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:من فضلك )?(?:اقرا|لخص|اعرض) (?:كل |جميع |اخر )?(?:الاشعارات|اشعاراتي|اشعارات)(?: الحاليه| الجديده| علي الهاتف| في الهاتف)?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 110
+    }
+  ],
+  "conversationalPatterns": [
+    {
+      "patternId": "ar_greeting",
+      "regexPattern": "^(?:مرحبا|اهلا|السلام عليكم|صباح الخير|مساء الخير)(?: نافا)?[.!?؟]?$",
+      "replyText": "مرحبًا. أنا نافا. كيف يمكنني مساعدتك؟",
+      "priority": 100
+    },
+    {
+      "patternId": "ar_identity",
+      "regexPattern": "^(?:من انت|ما اسمك)[.!?؟]?$",
+      "replyText": "أنا نافا، مساعدك على أندرويد الذي يعمل بالكامل على الجهاز ودون اتصال بالإنترنت.",
+      "priority": 100
+    },
+    {
+      "patternId": "ar_capabilities",
+      "regexPattern": "^(?:ماذا يمكنك ان تفعل|مساعده)[.!?؟]?$",
+      "replyText": "يمكنني ضبط المنبهات والمؤقتات وإدارة وضع التركيز ومساعدتك دون إنترنت في التقويم والملاحظات والخزنة ومسودات الرسائل.",
+      "priority": 100
+    },
+    {
+      "patternId": "ar_thanks",
+      "regexPattern": "^(?:شكرا|شكرا لك)(?: نافا)?[.!?؟]?$",
+      "replyText": "على الرحب والسعة. أخبرني إذا احتجت إلى أي مساعدة أخرى.",
+      "priority": 100
     }
   ]
 }

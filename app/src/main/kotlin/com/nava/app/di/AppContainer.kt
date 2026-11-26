@@ -1,8 +1,10 @@
 package com.nava.app.di
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import com.nava.app.assistant.AssistantIntentContract
+import com.nava.app.diagnostics.LogcatLlmTurnDiagnosticsSink
 import com.nava.app.locale.AndroidPlatformLocaleBridge
 import com.nava.app.locale.AppLocaleManager
 import com.nava.app.locale.BidiTextFormatter
@@ -12,17 +14,23 @@ import com.nava.app.locale.LocaleDateTimeFormatter
 import com.nava.app.locale.MessageTemplateProvider
 import com.nava.app.locale.NavaMessageRenderer
 import com.nava.app.locale.PlatformLocaleBridge
+import com.nava.app.reminders.MorningBriefingPreferencesStore
 import com.nava.app.security.AndroidBiometricPromptGateway
 import com.nava.app.security.BiometricPromptGateway
 import com.nava.app.security.BiometricPromptGatewayOutcome
 import com.nava.app.security.BiometricPromptLabels
 import com.nava.app.security.PendingConfirmationStore
 import com.nava.app.security.VaultBiometricController
+import com.nava.app.ui.theme.ThemePreferenceStore
 import com.nava.app.voice.AndroidOnDeviceSpeechRecognizerGateway
 import com.nava.app.voice.OnDeviceSpeechConfig
 import com.nava.app.voice.OnDeviceSpeechListener
 import com.nava.app.voice.OnDeviceSpeechRecognizerGateway
 import com.nava.app.voice.OnDeviceVoiceInputController
+import com.nava.core.ai.embedding.AndroidLiteRtEmbeddingRuntimeAdapter
+import com.nava.core.ai.embedding.EmbeddingNoteSemanticRanker
+import com.nava.core.ai.embedding.EmbeddingRuntimeAdapter
+import com.nava.core.ai.embedding.LiteRtEmbeddingEngine
 import com.nava.core.ai.engine.AndroidLiteRtRuntimeAdapter
 import com.nava.core.ai.engine.LiteRtLlmEngine
 import com.nava.core.ai.engine.LiteRtRuntimeAdapter
@@ -31,6 +39,8 @@ import com.nava.core.ai.engine.RuntimeTurnConfig
 import com.nava.core.ai.lifecycle.AndroidDeviceHardwareStatusProvider
 import com.nava.core.ai.lifecycle.DeviceHardwareSnapshot
 import com.nava.core.ai.lifecycle.DeviceHardwareStatusProvider
+import com.nava.core.ai.lifecycle.ModelSlot
+import com.nava.core.ai.lifecycle.MultiModelCoordinator
 import com.nava.core.ai.lifecycle.ThermalModelLifecycleManager
 import com.nava.core.ai.locale.AndroidAssetTextReader
 import com.nava.core.ai.locale.AndroidTextClassifierAdapter
@@ -48,6 +58,7 @@ import com.nava.core.ai.provisioning.SafModelProvisioner
 import com.nava.core.ai.provisioning.StorageSpaceProvider
 import com.nava.core.ai.pruner.DynamicToolPruner
 import com.nava.core.ai.router.CacheIntentResolver
+import com.nava.core.ai.router.FunctionGemmaIntentResolver
 import com.nava.core.ai.router.GemmaIntentResolver
 import com.nava.core.ai.router.RuleIntentResolver
 import com.nava.core.security.crypto.AesGcmCryptoEngine
@@ -57,6 +68,7 @@ import com.nava.core.security.crypto.HmacSha256Engine
 import com.nava.core.security.dao.ActionCacheDao
 import com.nava.core.security.dao.AuditLogDao
 import com.nava.core.security.dao.EncryptedNoteDao
+import com.nava.core.security.dao.ScheduledReminderDao
 import com.nava.core.security.firewall.BlindSlotExtractor
 import com.nava.core.security.firewall.OutboundChannelPolicy
 import com.nava.core.security.firewall.SecurityFirewall
@@ -68,11 +80,14 @@ import com.nava.core.security.storage.EncryptedSqliteStore
 import com.nava.core.security.storage.EncryptedTableSchema
 import com.nava.core.security.storage.RawEncryptedRow
 import com.nava.core.security.vault.NavaVault
+import com.nava.domain.ai.EmbeddingPort
 import com.nava.domain.ai.IntentResolver
 import com.nava.domain.ai.LlmEnginePort
 import com.nava.domain.ai.PinnedModelSpec
 import com.nava.domain.ai.RamTier
 import com.nava.domain.automation.BackgroundTaskRequest
+import com.nava.domain.automation.ReminderSchedulerPort
+import com.nava.domain.automation.ScheduledReminder
 import com.nava.domain.locale.GenericTextNormalizer
 import com.nava.domain.locale.LocaleNormalizerRegistry
 import com.nava.domain.security.RuleCapabilityGrant
@@ -89,6 +104,8 @@ import com.nava.feature.automations.audio.AudioDndTool
 import com.nava.feature.automations.background.BackgroundTaskContinuationManager
 import com.nava.feature.automations.background.BackgroundTaskWorkScheduler
 import com.nava.feature.automations.background.WorkManagerBackgroundTaskScheduler
+import com.nava.feature.automations.briefing.DailyBriefingBuilder
+import com.nava.feature.automations.briefing.DailyBriefingTool
 import com.nava.feature.automations.calendar.CalendarTool
 import com.nava.feature.automations.call.CallIntentTool
 import com.nava.feature.automations.common.AndroidAudioDndPlatformGateway
@@ -113,11 +130,15 @@ import com.nava.feature.automations.common.PlatformDispatchResult
 import com.nava.feature.automations.common.SafDocumentEntry
 import com.nava.feature.automations.common.SafGatewayResult
 import com.nava.feature.automations.common.SafPlatformGateway
+import com.nava.feature.automations.notes.NotesSearchTool
 import com.nava.feature.automations.notes.NotesVaultTool
 import com.nava.feature.automations.notification.InMemoryNotificationInbox
 import com.nava.feature.automations.notification.NotificationServiceBinding
 import com.nava.feature.automations.notification.NotificationSummaryTool
+import com.nava.feature.automations.reminder.ReminderAlarmScheduler
+import com.nava.feature.automations.reminder.ReminderTools
 import com.nava.feature.automations.routine.AutomationWorkerRegistry
+import com.nava.feature.automations.routine.ProposeRoutineTool
 import com.nava.feature.automations.routine.RoutineExecutor
 import com.nava.feature.automations.routine.RoutineWorkScheduler
 import com.nava.feature.automations.routine.WorkManagerRoutineScheduler
@@ -125,7 +146,9 @@ import com.nava.feature.automations.saf.SafDirectoryTool
 import com.nava.feature.automations.sms.SmsDraftTool
 import java.io.File
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import kotlinx.coroutines.CoroutineDispatcher
@@ -133,6 +156,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -153,7 +177,7 @@ import androidx.biometric.BiometricPrompt
  *   `Dispatchers.IO` inside [resolveActiveModelPath] only when Tier 3 inference is invoked.
  */
 class AppContainer internal constructor(
-    private val appContext: Context?,
+    val appContext: Context?,
     private val templateProviderFactory: (Context) -> MessageTemplateProvider = {
         FallbackEnglishMessageTemplateProvider()
     },
@@ -167,6 +191,9 @@ class AppContainer internal constructor(
     private val platformLanguageClassifierOverride: PlatformLanguageClassifier? = null,
     private val hardwareStatusProviderOverride: DeviceHardwareStatusProvider? = null,
     private val liteRtRuntimeAdapterOverride: LiteRtRuntimeAdapter? = null,
+    private val functionRuntimeAdapterOverride: LiteRtRuntimeAdapter? = null,
+    private val embeddingRuntimeAdapterOverride: EmbeddingRuntimeAdapter? = null,
+    private val embeddingPortOverride: EmbeddingPort? = null,
     private val intentGatewayOverride: AutomationIntentGateway? = null,
     private val audioDndGatewayOverride: AudioDndPlatformGateway? = null,
     private val calendarGatewayOverride: CalendarPlatformGateway? = null,
@@ -174,6 +201,7 @@ class AppContainer internal constructor(
     private val notificationBridgeOverride: AutomationNotificationBridge? = null,
     private val routineWorkSchedulerOverride: RoutineWorkScheduler? = null,
     private val backgroundTaskWorkSchedulerOverride: BackgroundTaskWorkScheduler? = null,
+    private val reminderSchedulerOverride: ReminderSchedulerPort? = null,
     private val platformLocaleBridgeOverride: PlatformLocaleBridge? = null,
     private val preferencesStorageGatewayOverride: PreferencesStorageGateway? = null,
     private val biometricPromptGatewayOverride: BiometricPromptGateway? = null,
@@ -247,6 +275,10 @@ class AppContainer internal constructor(
 
     val encryptedNoteDao: EncryptedNoteDao by lazy {
         EncryptedNoteDao(store = encryptedSqliteStore)
+    }
+
+    val scheduledReminderDao: ScheduledReminderDao by lazy {
+        ScheduledReminderDao(store = encryptedSqliteStore)
     }
 
     val permissionProfileManager: PermissionProfileManager by lazy {
@@ -340,6 +372,10 @@ class AppContainer internal constructor(
         )
     }
 
+    val multiModelCoordinator: MultiModelCoordinator by lazy {
+        MultiModelCoordinator(hardwareStatusProvider)
+    }
+
     val storageSpaceProvider: StorageSpaceProvider by lazy {
         storageSpaceProviderOverride ?: AndroidStatFsStorageSpaceProvider()
     }
@@ -362,12 +398,58 @@ class AppContainer internal constructor(
             modelPathProvider = { resolveActiveModelPath() },
             lifecycleManager = thermalModelLifecycleManager,
             runtimeAdapter = liteRtRuntimeAdapter,
-            clockMs = clockMs
+            clockMs = clockMs,
+            coordinator = multiModelCoordinator,
+            modelSlot = ModelSlot.PRIMARY_LLM
         )
     }
 
     val llmEngine: LlmEnginePort
         get() = liteRtLlmEngine
+
+    val embeddingRuntimeAdapter: EmbeddingRuntimeAdapter by lazy {
+        embeddingRuntimeAdapterOverride ?: if (appContext != null) {
+            AndroidLiteRtEmbeddingRuntimeAdapter(requireContext())
+        } else {
+            NoOpTestEmbeddingRuntimeAdapter()
+        }
+    }
+
+    val liteRtEmbeddingEngine: LiteRtEmbeddingEngine by lazy {
+        LiteRtEmbeddingEngine(
+            modelPathProvider = { resolveActiveEmbeddingModelPath() },
+            lifecycleManager = thermalModelLifecycleManager,
+            runtimeAdapter = embeddingRuntimeAdapter,
+            coordinator = multiModelCoordinator
+        )
+    }
+
+    val embeddingPort: EmbeddingPort by lazy {
+        embeddingPortOverride ?: liteRtEmbeddingEngine
+    }
+
+    val embeddingNoteSemanticRanker: EmbeddingNoteSemanticRanker by lazy {
+        EmbeddingNoteSemanticRanker(embeddingPort)
+    }
+
+    val functionRuntimeAdapter: LiteRtRuntimeAdapter by lazy {
+        functionRuntimeAdapterOverride ?: if (appContext != null) {
+            AndroidLiteRtRuntimeAdapter(context = requireContext(), useGpuBackend = false)
+        } else {
+            NoOpTestLiteRtRuntimeAdapter()
+        }
+    }
+
+    val functionGemmaEngine: LiteRtLlmEngine by lazy {
+        LiteRtLlmEngine(
+            modelPathProvider = { resolveActiveFunctionModelPath() },
+            lifecycleManager = thermalModelLifecycleManager,
+            runtimeAdapter = functionRuntimeAdapter,
+            clockMs = clockMs,
+            coordinator = multiModelCoordinator,
+            modelSlot = ModelSlot.FUNCTION_ROUTER
+        )
+    }
 
     val blindSlotExtractor: BlindSlotExtractor by lazy {
         BlindSlotExtractor(llmEngine = llmEngine)
@@ -401,13 +483,41 @@ class AppContainer internal constructor(
         )
     }
 
+    val functionGemmaIntentResolver: FunctionGemmaIntentResolver by lazy {
+        FunctionGemmaIntentResolver(
+            functionEngine = functionGemmaEngine,
+            isModelAvailable = { resolveActiveFunctionModelPath() != null },
+            lifecycleManager = thermalModelLifecycleManager,
+            coordinator = multiModelCoordinator,
+            toolPruner = dynamicToolPruner,
+            microDslParser = microDslParser,
+            securityFirewall = securityFirewall,
+            rulePackLoader = localeRulePackLoader,
+            embeddingPort = embeddingPort
+        )
+    }
+
+    /**
+     * Developer-only Tier 3 diagnostics sink. Non-null ONLY in debuggable builds
+     * (`ApplicationInfo.FLAG_DEBUGGABLE`), so release builds never log utterances or model output.
+     */
+    val llmDiagnosticsSink: LogcatLlmTurnDiagnosticsSink? by lazy {
+        val debuggable = appContext?.applicationInfo?.let { info ->
+            (info.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        } ?: false
+        if (debuggable) LogcatLlmTurnDiagnosticsSink() else null
+    }
+
     val gemmaIntentResolver: GemmaIntentResolver by lazy {
         GemmaIntentResolver(
             llmEngine = llmEngine,
             lifecycleManager = thermalModelLifecycleManager,
             toolPruner = dynamicToolPruner,
             microDslParser = microDslParser,
-            securityFirewall = securityFirewall
+            securityFirewall = securityFirewall,
+            rulePackLoader = localeRulePackLoader,
+            diagnosticsSink = llmDiagnosticsSink,
+            embeddingPort = embeddingPort
         )
     }
 
@@ -415,6 +525,7 @@ class AppContainer internal constructor(
         listOf(
             ruleIntentResolver,
             cacheIntentResolver,
+            functionGemmaIntentResolver,
             gemmaIntentResolver
         )
     }
@@ -493,6 +604,16 @@ class AppContainer internal constructor(
         )
     }
 
+    val notesSearchTool: NotesSearchTool by lazy {
+        NotesSearchTool(
+            noteStorage = encryptedNoteDao,
+            permissionEvaluator = permissionProfileManager,
+            auditLog = auditLogDao,
+            semanticRanker = embeddingNoteSemanticRanker,
+            clock = clockMs
+        )
+    }
+
     val safDirectoryTools: List<NavaTool> by lazy {
         SafDirectoryTool.createAll(
             safGateway = safGateway,
@@ -506,7 +627,8 @@ class AppContainer internal constructor(
             intentGateway = intentGateway,
             firewall = securityFirewall,
             auditLog = auditLogDao,
-            clock = clockMs
+            clock = clockMs,
+            permissionEvaluator = permissionProfileManager
         )
     }
 
@@ -514,25 +636,112 @@ class AppContainer internal constructor(
         NotificationSummaryTool(
             inbox = notificationInbox,
             permissionEvaluator = permissionProfileManager,
-            auditLog = auditLogDao
+            auditLog = auditLogDao,
+            intentGateway = intentGateway
         )
     }
 
+    val reminderAlarmScheduler: ReminderSchedulerPort by lazy {
+        reminderSchedulerOverride
+            ?: appContext?.let { ReminderAlarmScheduler(it) }
+            ?: object : ReminderSchedulerPort {
+                override fun scheduleReminder(reminder: ScheduledReminder): Boolean = true
+                override fun cancelReminder(reminderId: String) = Unit
+                override fun scheduleMorningBriefing(hour: Int, minute: Int, nowEpochMs: Long): Long? =
+                    ReminderAlarmScheduler.computeNextDailyTriggerEpochMs(hour, minute, nowEpochMs)
+                override fun cancelMorningBriefing() = Unit
+            }
+    }
+
+    val notificationWatcherDao: com.nava.core.security.dao.NotificationWatcherDao by lazy {
+        com.nava.core.security.dao.NotificationWatcherDao(encryptedSqliteStore)
+    }
+
+    val notificationWatcherEngine: com.nava.feature.automations.notification.NotificationWatcherEngine by lazy {
+        com.nava.feature.automations.notification.NotificationWatcherEngine(
+            watcherPort = notificationWatcherDao,
+            alertPort = com.nava.domain.automation.NotificationWatcherAlertPort { watcher, sourcePkg, title, snippet ->
+                appContext?.let { ctx ->
+                    com.nava.app.reminders.ReminderNotificationPoster.postWatcherAlertNotification(
+                        context = ctx,
+                        watcher = watcher,
+                        sourcePackageName = sourcePkg,
+                        title = title,
+                        snippet = snippet
+                    )
+                }
+            },
+            clockMs = clockMs
+        )
+    }
+
+    val notificationWatcherTools: List<NavaTool> by lazy {
+        com.nava.feature.automations.notification.NotificationWatcherTools.createAll(
+            watcherPort = notificationWatcherDao,
+            auditLog = auditLogDao,
+            clockMs = clockMs
+        )
+    }
+
+    val reminderTools: List<NavaTool> by lazy {
+        ReminderTools.createAll(
+            reminderPort = scheduledReminderDao,
+            schedulerPort = reminderAlarmScheduler,
+            auditLog = auditLogDao,
+            clock = clockMs
+        )
+    }
+
+    val proposeRoutineTool: ProposeRoutineTool by lazy {
+        ProposeRoutineTool(
+            ruleGrantPort = ruleCapabilityGrantManager,
+            toolRegistryProvider = { toolRegistry },
+            auditLog = auditLogDao,
+            clock = clockMs
+        )
+    }
+
+    val dailyBriefingBuilder: DailyBriefingBuilder by lazy {
+        DailyBriefingBuilder(
+            reminderPort = scheduledReminderDao,
+            notificationInbox = notificationInbox,
+            permissionEvaluator = permissionProfileManager,
+            calendarGateway = calendarGateway
+        )
+    }
+
+    val dailyBriefingTool: DailyBriefingTool by lazy {
+        DailyBriefingTool(
+            builder = dailyBriefingBuilder,
+            auditLog = auditLogDao,
+            configProvider = { morningBriefingPreferencesStore.currentConfig() },
+            clock = clockMs
+        )
+    }
+
+    /** Reactive signal set by [com.nava.app.MainActivity] when the user taps "Summarize with Nava" on a Morning Briefing notification. */
+    val briefingSummaryRequested: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
     /**
-     * Open/Closed [ToolRegistry] populated with all 21 atomic Phase 4 [NavaTool] adapters.
+     * Open/Closed [ToolRegistry] populated with all atomic [NavaTool] adapters.
      */
     val toolRegistry: ToolRegistry by lazy {
         ToolRegistry(
             initialTools = buildList {
                 addAll(alarmTimerTool.allTools())        // 2: set_alarm, set_timer
+                addAll(reminderTools)                    // 2: schedule_reminder, cancel_reminder
                 addAll(calendarTool.allTools())          // 3: calendar_query, calendar_create, calendar_modify
                 addAll(notesVaultTools)                  // 6: notes_read/create/delete, vault_read/write/delete
+                add(notesSearchTool)                     // 1: notes_search
                 add(smsDraftTool)                        // 1: create_sms_draft
                 addAll(callIntentTools)                  // 2: dial_call, place_call
                 add(notificationSummaryTool)             // 1: summarize_notifications
+                addAll(notificationWatcherTools)         // 2: create_notification_watcher, manage_notification_watchers
+                add(dailyBriefingTool)                   // 1: daily_briefing
                 addAll(audioDndTool.allTools())          // 2: set_dnd, set_volume
                 add(appLaunchTool)                       // 1: launch_app
                 addAll(safDirectoryTools)                // 3: saf_read, saf_write, saf_delete
+                add(proposeRoutineTool)                  // 1: propose_routine
             }
         )
     }
@@ -618,6 +827,14 @@ class AppContainer internal constructor(
         OnboardingStateStore(storage = preferencesStorageGateway)
     }
 
+    val themePreferenceStore: ThemePreferenceStore by lazy {
+        ThemePreferenceStore(storage = preferencesStorageGateway)
+    }
+
+    val morningBriefingPreferencesStore: MorningBriefingPreferencesStore by lazy {
+        MorningBriefingPreferencesStore(storage = preferencesStorageGateway)
+    }
+
     val biometricPromptGateway: BiometricPromptGateway by lazy {
         biometricPromptGatewayOverride ?: AndroidBiometricPromptGateway()
     }
@@ -660,7 +877,8 @@ class AppContainer internal constructor(
                 appContext?.let { ctx ->
                     AssistantIntentContract.buildConfirmationPendingIntent(ctx, request)
                 }
-            }
+            },
+            smallIconResId = com.nava.app.R.drawable.ic_stat_nava
         )
     }
 
@@ -701,14 +919,109 @@ class AppContainer internal constructor(
     // -------------------------------------------------------------------------
 
     private data class VerifiedModelCache(
-        val absolutePath: String,
+        val canonicalPath: String,
         val sizeBytes: Long,
-        val lastModifiedMs: Long
+        val lastModifiedMs: Long,
+        val expectedSha256Hex: String
     )
 
     private val modelResolveMutex = Mutex()
-    @Volatile
-    private var cachedVerifiedModel: VerifiedModelCache? = null
+    private val verifiedModelsById = ConcurrentHashMap<String, VerifiedModelCache>()
+
+    private fun modelIntegrityPrefKey(modelId: String): String = "model_integrity_hmac_$modelId"
+
+    private fun computeModelIntegrityStamp(
+        canonicalPath: String,
+        sizeBytes: Long,
+        lastModifiedMs: Long,
+        spec: PinnedModelSpec
+    ): String? {
+        return runCatching {
+            hmacEngine.computeBlindIndex(
+                keyProvider.getOrCreateBlindIndexKey(),
+                MODEL_INTEGRITY_HMAC_DOMAIN,
+                spec.modelId,
+                canonicalPath,
+                sizeBytes.toString(),
+                lastModifiedMs.toString(),
+                spec.expectedSha256Hex.lowercase(Locale.ROOT)
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun verifyOrUseCachedModelIntegrity(
+        candidateFile: File,
+        spec: PinnedModelSpec
+    ): Boolean {
+        if (!verifyModelSha256OnResolve) {
+            return true
+        }
+        val canonicalPath = runCatching { candidateFile.canonicalPath }.getOrNull() ?: return false
+        val sizeBytes = candidateFile.length()
+        val lastModifiedMs = candidateFile.lastModified()
+        val expectedShaLower = spec.expectedSha256Hex.lowercase(Locale.ROOT)
+
+        val memCached = verifiedModelsById[spec.modelId]
+        if (memCached != null &&
+            memCached.canonicalPath == canonicalPath &&
+            memCached.sizeBytes == sizeBytes &&
+            memCached.lastModifiedMs == lastModifiedMs &&
+            memCached.expectedSha256Hex == expectedShaLower
+        ) {
+            return true
+        }
+
+        val prefKey = modelIntegrityPrefKey(spec.modelId)
+        val storedStamp = preferencesStorageGateway.getString(prefKey, null)
+        if (!storedStamp.isNullOrBlank()) {
+            val expectedStamp = computeModelIntegrityStamp(
+                canonicalPath = canonicalPath,
+                sizeBytes = sizeBytes,
+                lastModifiedMs = lastModifiedMs,
+                spec = spec
+            )
+            if (expectedStamp != null &&
+                MessageDigest.isEqual(
+                    storedStamp.toByteArray(Charsets.UTF_8),
+                    expectedStamp.toByteArray(Charsets.UTF_8)
+                )
+            ) {
+                verifiedModelsById[spec.modelId] = VerifiedModelCache(
+                    canonicalPath = canonicalPath,
+                    sizeBytes = sizeBytes,
+                    lastModifiedMs = lastModifiedMs,
+                    expectedSha256Hex = expectedShaLower
+                )
+                return true
+            }
+        }
+
+        val valid = safModelProvisioner.verifyFileIntegrity(
+            absolutePath = candidateFile.absolutePath,
+            expectedSha256Hex = spec.expectedSha256Hex
+        )
+        if (!valid) {
+            verifiedModelsById.remove(spec.modelId)
+            preferencesStorageGateway.putString(prefKey, null)
+            return false
+        }
+
+        computeModelIntegrityStamp(
+            canonicalPath = canonicalPath,
+            sizeBytes = sizeBytes,
+            lastModifiedMs = lastModifiedMs,
+            spec = spec
+        )?.let { freshStamp ->
+            preferencesStorageGateway.putString(prefKey, freshStamp)
+        }
+        verifiedModelsById[spec.modelId] = VerifiedModelCache(
+            canonicalPath = canonicalPath,
+            sizeBytes = sizeBytes,
+            lastModifiedMs = lastModifiedMs,
+            expectedSha256Hex = expectedShaLower
+        )
+        return true
+    }
 
     /**
      * Asynchronously resolves the active provisioned `.litertlm` model path on [ioDispatcher]
@@ -735,32 +1048,10 @@ class AppContainer internal constructor(
                 if (!candidateFile.exists() || !candidateFile.isFile || candidateFile.length() <= 0L) {
                     continue
                 }
-                val cached = cachedVerifiedModel
-                if (cached != null &&
-                    cached.absolutePath == candidateFile.absolutePath &&
-                    cached.sizeBytes == candidateFile.length() &&
-                    cached.lastModifiedMs == candidateFile.lastModified()
-                ) {
-                    return@withLock cached.absolutePath
+                if (!verifyOrUseCachedModelIntegrity(candidateFile, spec)) {
+                    continue
                 }
-
-                if (verifyModelSha256OnResolve) {
-                    val valid = safModelProvisioner.verifyFileIntegrity(
-                        absolutePath = candidateFile.absolutePath,
-                        expectedSha256Hex = spec.expectedSha256Hex
-                    )
-                    if (!valid) {
-                        continue
-                    }
-                }
-
-                val verified = VerifiedModelCache(
-                    absolutePath = candidateFile.absolutePath,
-                    sizeBytes = candidateFile.length(),
-                    lastModifiedMs = candidateFile.lastModified()
-                )
-                cachedVerifiedModel = verified
-                return@withLock verified.absolutePath
+                return@withLock candidateFile.absolutePath
             }
 
             null
@@ -775,8 +1066,12 @@ class AppContainer internal constructor(
     fun bindPlatformServices() {
         NotificationServiceBinding.bind(
             evaluatorPort = permissionProfileManager,
-            inboxPort = notificationInbox
+            inboxPort = notificationInbox,
+            onLiveIngested = { captured ->
+                notificationWatcherEngine.onLiveNotificationIngested(captured)
+            }
         )
+        appContext?.let { NotificationServiceBinding.requestRebindIfUnbound(it) }
         AutomationWorkerRegistry.bind(
             routineExecutor = routineExecutor,
             backgroundTaskManager = backgroundTaskContinuationManager,
@@ -792,7 +1087,92 @@ class AppContainer internal constructor(
         AutomationWorkerRegistry.unbind()
         runCatching { vaultBiometricController.lock() }
         runCatching { liteRtLlmEngine.unloadModel() }
+        runCatching { functionGemmaEngine.unloadModel() }
+        runCatching { embeddingPort.unloadEmbeddingModel() }
         runCatching { encryptedSqliteStore.close() }
+    }
+
+    fun isFunctionRouterEnabled(): Boolean {
+        return preferencesStorageGateway.getString(KEY_FUNCTION_ROUTER_ENABLED, "true") != "false"
+    }
+
+    suspend fun setFunctionRouterEnabled(enabled: Boolean) {
+        preferencesStorageGateway.putString(KEY_FUNCTION_ROUTER_ENABLED, enabled.toString())
+        if (!enabled) {
+            runCatching { functionGemmaEngine.unloadModel() }
+        }
+    }
+
+    fun isSemanticEmbeddingEnabled(): Boolean {
+        return preferencesStorageGateway.getString(KEY_SEMANTIC_EMBEDDING_ENABLED, "true") != "false"
+    }
+
+    suspend fun setSemanticEmbeddingEnabled(enabled: Boolean) {
+        preferencesStorageGateway.putString(KEY_SEMANTIC_EMBEDDING_ENABLED, enabled.toString())
+        if (!enabled) {
+            runCatching { embeddingPort.unloadEmbeddingModel() }
+        }
+    }
+
+    /**
+     * Resolves the provisioned function-calling model path (`mobile-actions_q8_ekv1024.litertlm`).
+     */
+    suspend fun resolveActiveFunctionModelPath(): String? = withContext(ioDispatcher) {
+        if (!isFunctionRouterEnabled()) {
+            return@withContext null
+        }
+        val modelsDir = File(safModelProvisioner.modelsDirectoryPath())
+        if (!modelsDir.exists() || !modelsDir.isDirectory) {
+            return@withContext null
+        }
+        val selectedId = onboardingStateStore.getSelectedFunctionModelId()
+        val specs = listOfNotNull(
+            PinnedModelCatalog.findByModelId(selectedId),
+            PinnedModelCatalog.MOBILE_ACTIONS_SPEC
+        ).distinctBy { it.modelId }
+
+        for (spec in specs) {
+            val candidateFile = File(modelsDir, spec.fileName)
+            if (!candidateFile.exists() || !candidateFile.isFile || candidateFile.length() <= 0L) {
+                continue
+            }
+            if (!verifyOrUseCachedModelIntegrity(candidateFile, spec)) {
+                continue
+            }
+            return@withContext candidateFile.absolutePath
+        }
+        null
+    }
+
+    /**
+     * Resolves the provisioned semantic embedding model path (`embeddinggemma-2-*.litertlm`).
+     */
+    suspend fun resolveActiveEmbeddingModelPath(): String? = withContext(ioDispatcher) {
+        if (!isSemanticEmbeddingEnabled()) {
+            return@withContext null
+        }
+        val modelsDir = File(safModelProvisioner.modelsDirectoryPath())
+        if (!modelsDir.exists() || !modelsDir.isDirectory) {
+            return@withContext null
+        }
+        val selectedId = onboardingStateStore.getSelectedEmbeddingModelId()
+        val specs = listOfNotNull(
+            PinnedModelCatalog.findByModelId(selectedId),
+            PinnedModelCatalog.EMBEDDING_GEMMA_270M_SPEC,
+            PinnedModelCatalog.EMBEDDING_GEMMA_SPEC
+        ).distinctBy { it.modelId }
+
+        for (spec in specs) {
+            val candidateFile = File(modelsDir, spec.fileName)
+            if (!candidateFile.exists() || !candidateFile.isFile || candidateFile.length() <= 0L) {
+                continue
+            }
+            if (!verifyOrUseCachedModelIntegrity(candidateFile, spec)) {
+                continue
+            }
+            return@withContext candidateFile.absolutePath
+        }
+        null
     }
 
     private fun buildCandidateModelSpecList(
@@ -803,7 +1183,7 @@ class AppContainer internal constructor(
         val seenIds = LinkedHashSet<String>(3)
 
         fun addIfAbsent(spec: PinnedModelSpec?) {
-            if (spec != null && seenIds.add(spec.modelId)) {
+            if (spec != null && PinnedModelCatalog.ALL_SPECS.any { it.modelId == spec.modelId } && seenIds.add(spec.modelId)) {
                 ordered.add(spec)
             }
         }
@@ -837,12 +1217,26 @@ class AppContainer internal constructor(
                 sourceUri = Uri.parse(request.sourceUri),
                 pinnedSpec = effectiveSpec
             )
-            onboardingStateStore.setSelectedModelId(imported.modelId)
-            cachedVerifiedModel = VerifiedModelCache(
-                absolutePath = imported.absolutePath,
-                sizeBytes = imported.sizeBytes,
-                lastModifiedMs = File(imported.absolutePath).lastModified()
-            )
+            onboardingStateStore.assignImportedModelByRole(imported.modelId)
+            val importedFile = File(imported.absolutePath)
+            val canonicalPath = runCatching { importedFile.canonicalPath }.getOrNull()
+            if (canonicalPath != null) {
+                val lastMod = importedFile.lastModified()
+                computeModelIntegrityStamp(
+                    canonicalPath = canonicalPath,
+                    sizeBytes = imported.sizeBytes,
+                    lastModifiedMs = lastMod,
+                    spec = effectiveSpec
+                )?.let { freshStamp ->
+                    preferencesStorageGateway.putString(modelIntegrityPrefKey(effectiveSpec.modelId), freshStamp)
+                }
+                verifiedModelsById[effectiveSpec.modelId] = VerifiedModelCache(
+                    canonicalPath = canonicalPath,
+                    sizeBytes = imported.sizeBytes,
+                    lastModifiedMs = lastMod,
+                    expectedSha256Hex = effectiveSpec.expectedSha256Hex.lowercase(Locale.ROOT)
+                )
+            }
             true
         } else {
             val valid = safModelProvisioner.verifyFileIntegrity(
@@ -850,7 +1244,7 @@ class AppContainer internal constructor(
                 expectedSha256Hex = request.expectedSha256Hex
             )
             if (valid) {
-                onboardingStateStore.setSelectedModelId(effectiveSpec.modelId)
+                onboardingStateStore.assignImportedModelByRole(effectiveSpec.modelId)
             }
             valid
         }
@@ -858,6 +1252,9 @@ class AppContainer internal constructor(
 
     companion object {
         const val VAULT_DIR_NAME: String = "vault"
+        private const val MODEL_INTEGRITY_HMAC_DOMAIN: String = "nava_model_integrity_v1"
+        private const val KEY_FUNCTION_ROUTER_ENABLED: String = "addon_function_router_enabled"
+        private const val KEY_SEMANTIC_EMBEDDING_ENABLED: String = "addon_semantic_embedding_enabled"
 
         /**
          * Clean testing factory creating a self-contained [AppContainer] wired with real
@@ -877,6 +1274,9 @@ class AppContainer internal constructor(
             platformLanguageClassifier: PlatformLanguageClassifier? = null,
             hardwareStatusProvider: DeviceHardwareStatusProvider = FixedTestHardwareStatusProvider(),
             liteRtRuntimeAdapter: LiteRtRuntimeAdapter = NoOpTestLiteRtRuntimeAdapter(),
+            functionRuntimeAdapter: LiteRtRuntimeAdapter = NoOpTestLiteRtRuntimeAdapter(),
+            embeddingRuntimeAdapter: EmbeddingRuntimeAdapter = NoOpTestEmbeddingRuntimeAdapter(),
+            embeddingPort: EmbeddingPort = NoOpTestEmbeddingPort(),
             intentGateway: AutomationIntentGateway = NoOpTestAutomationIntentGateway(),
             audioDndGateway: AudioDndPlatformGateway = NoOpTestAudioDndPlatformGateway(),
             calendarGateway: CalendarPlatformGateway = NoOpTestCalendarPlatformGateway(),
@@ -906,6 +1306,9 @@ class AppContainer internal constructor(
                 platformLanguageClassifierOverride = platformLanguageClassifier,
                 hardwareStatusProviderOverride = hardwareStatusProvider,
                 liteRtRuntimeAdapterOverride = liteRtRuntimeAdapter,
+                functionRuntimeAdapterOverride = functionRuntimeAdapter,
+                embeddingRuntimeAdapterOverride = embeddingRuntimeAdapter,
+                embeddingPortOverride = embeddingPort,
                 intentGatewayOverride = intentGateway,
                 audioDndGatewayOverride = audioDndGateway,
                 calendarGatewayOverride = calendarGateway,
@@ -1185,6 +1588,25 @@ internal class NoOpTestLiteRtRuntimeAdapter : LiteRtRuntimeAdapter {
         config: RuntimeTurnConfig
     ): Flow<RuntimeStreamDelta> = emptyFlow()
 
+    override suspend fun unload() {
+        loaded = false
+    }
+}
+
+internal class NoOpTestEmbeddingPort : EmbeddingPort {
+    override suspend fun isEmbeddingModelAvailable(): Boolean = false
+    override suspend fun embedQuery(query: String): FloatArray? = null
+    override suspend fun embedDocument(title: String, text: String): FloatArray? = null
+    override suspend fun unloadEmbeddingModel() {}
+}
+
+internal class NoOpTestEmbeddingRuntimeAdapter : EmbeddingRuntimeAdapter {
+    private var loaded = false
+    override fun isLoaded(): Boolean = loaded
+    override suspend fun ensureLoaded(modelPath: String) {
+        loaded = true
+    }
+    override suspend fun computeEmbedding(formattedInput: String): FloatArray? = null
     override suspend fun unload() {
         loaded = false
     }

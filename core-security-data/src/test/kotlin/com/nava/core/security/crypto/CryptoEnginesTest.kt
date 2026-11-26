@@ -7,6 +7,7 @@ import javax.crypto.spec.GCMParameterSpec
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -148,6 +149,24 @@ class CryptoEnginesTest {
             fail("Expected IllegalStateException")
         } catch (_: IllegalStateException) {
             assertArrayEquals(byteArrayOf(0, 0, 0), failingScoped)
+        }
+    }
+
+    @Test
+    fun aesGcmCipherInitVerifiesKeyUsability() {
+        val masterKey = keyProvider.getOrCreateDbMasterKey()
+        val cipher = Cipher.getInstance(AesGcmCryptoEngine.TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, masterKey)
+        assertNotNull(cipher.iv)
+        assertEquals(12, cipher.iv.size)
+
+        // Verifying an incompatible key (HMAC key passed to AES cipher) fails
+        val hmacKey = keyProvider.getOrCreateBlindIndexKey()
+        try {
+            cipher.init(Cipher.ENCRYPT_MODE, hmacKey)
+            fail("Expected InvalidKeyException when passing HMAC key to AES cipher")
+        } catch (_: java.security.InvalidKeyException) {
+            // Expected
         }
     }
 

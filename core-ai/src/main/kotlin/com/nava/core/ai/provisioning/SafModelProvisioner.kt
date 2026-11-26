@@ -23,6 +23,7 @@ import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Abstraction over filesystem free-space inspection so storage pre-checks are deterministically
@@ -62,7 +63,14 @@ class SafModelProvisioner(
     private val clockMs: () -> Long = System::currentTimeMillis
 ) : ModelProvisionerPort {
 
+    private data class VerifiedDigestCacheEntry(
+        val sizeBytes: Long,
+        val lastModifiedMs: Long,
+        val sha256Hex: String
+    )
+
     private val mutationMutex = Mutex()
+    private val digestCache = ConcurrentHashMap<String, VerifiedDigestCacheEntry>()
 
     constructor(
         context: Context,
@@ -100,7 +108,7 @@ class SafModelProvisioner(
             if (!targetFile.exists() || !targetFile.isFile || targetFile.length() <= 0L) {
                 return@withContext null
             }
-            val shaHex = computeFileSha256Hex(targetFile)
+            val shaHex = getOrComputeSha256Hex(targetFile)
             ProvisionedModelInfo(
                 modelId = fileName.removeSuffix(LITERTLM_EXTENSION),
                 fileName = fileName,
@@ -128,7 +136,7 @@ class SafModelProvisioner(
                 if (!isSafelyContained(file)) {
                     continue
                 }
-                val shaHex = computeFileSha256Hex(file)
+                val shaHex = getOrComputeSha256Hex(file)
                 results.add(
                     ProvisionedModelInfo(
                         modelId = file.name.removeSuffix(LITERTLM_EXTENSION),
@@ -163,6 +171,7 @@ class SafModelProvisioner(
         withContext(Dispatchers.IO) {
             mutationMutex.withLock {
                 val targetFile = resolveContainedModelFile(fileName)
+                digestCache.remove(targetFile.canonicalPath)
                 if (targetFile.exists() && targetFile.isFile) {
                     targetFile.delete()
                 } else {
@@ -285,12 +294,18 @@ class SafModelProvisioner(
                 }
 
                 atomicPromote(tempFile, finalFile)
+                val shaHex = toHexLower(computedDigestBytes)
+                digestCache[finalFile.canonicalPath] = VerifiedDigestCacheEntry(
+                    sizeBytes = finalFile.length(),
+                    lastModifiedMs = finalFile.lastModified(),
+                    sha256Hex = shaHex
+                )
 
                 ProvisionedModelInfo(
                     modelId = pinnedSpec.modelId,
                     fileName = pinnedSpec.fileName,
                     absolutePath = finalFile.absolutePath,
-                    sha256Hex = toHexLower(computedDigestBytes),
+                    sha256Hex = shaHex,
                     sizeBytes = bytesCopied,
                     verifiedAtEpochMs = clockMs()
                 )
@@ -406,8 +421,25 @@ class SafModelProvisioner(
         return digest.digest()
     }
 
+    private suspend fun getOrComputeSha256Hex(file: File): String {
+        val key = file.canonicalPath
+        val size = file.length()
+        val modified = file.lastModified()
+        val cached = digestCache[key]
+        if (cached != null && cached.sizeBytes == size && cached.lastModifiedMs == modified) {
+            return cached.sha256Hex
+        }
+        return computeFileSha256Hex(file)
+    }
+
     private suspend fun computeFileSha256Hex(file: File): String {
-        return toHexLower(computeFileSha256Bytes(file))
+        val hex = toHexLower(computeFileSha256Bytes(file))
+        digestCache[file.canonicalPath] = VerifiedDigestCacheEntry(
+            sizeBytes = file.length(),
+            lastModifiedMs = file.lastModified(),
+            sha256Hex = hex
+        )
+        return hex
     }
 
     private fun decodeSha256Hex(hex: String): ByteArray? {

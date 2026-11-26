@@ -98,6 +98,61 @@
       },
       "staticSlots": {},
       "priority": 100
+    },
+    {
+      "patternId": "fr_schedule_reminder_in_min",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:s il te plait )?rappelle moi dans (\\d{1,4}) (?:minutes?|mins?) (?:de )?([a-z0-9][a-z0-9 .,'_-]{0,80})$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "fr_summarize_notifications_limit",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:s il te plait )?(?:resumer|resume|lire|lis|afficher|affiche|montrer|montre) (?:les |mes )?(?:dernieres |recentes )?(\\d{1,2}) notifications?(?: du telephone| sur mon telephone)?$",
+      "slotMappings": {
+        "limit": "1"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "fr_summarize_notifications",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:s il te plait )?(?:resumer|resume|lire|lis|verifier|verifie|afficher|affiche|montrer|montre) (?:les |mes |toutes les )?(?:dernieres |recentes |actuelles |nouvelles )?notifications?(?: du telephone| sur mon telephone)?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 110
+    }
+  ],
+  "conversationalPatterns": [
+    {
+      "patternId": "fr_greeting",
+      "regexPattern": "^(?:bonjour|salut|bonsoir)(?: nava)?[.!?]?$",
+      "replyText": "Bonjour. Je suis Nava. Comment puis-je vous aider ?",
+      "priority": 100
+    },
+    {
+      "patternId": "fr_identity",
+      "regexPattern": "^(?:qui es tu|qui etes vous|quel est ton nom)[.!?]?$",
+      "replyText": "Je suis Nava, votre assistant Android entièrement hors ligne et exécuté sur l'appareil.",
+      "priority": 100
+    },
+    {
+      "patternId": "fr_capabilities",
+      "regexPattern": "^(?:que peux tu faire|aide)[.!?]?$",
+      "replyText": "Je peux régler des alarmes et minuteurs, gérer le mode concentration et vous aider hors ligne avec l'agenda, les notes, le coffre et les brouillons.",
+      "priority": 100
+    },
+    {
+      "patternId": "fr_thanks",
+      "regexPattern": "^(?:merci|merci beaucoup)(?: nava)?[.!?]?$",
+      "replyText": "Je vous en prie. Dites-moi si je peux vous aider autrement.",
+      "priority": 100
     }
   ]
 }

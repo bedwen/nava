@@ -1,6 +1,9 @@
 package com.nava.feature.automations.notification
 
 import android.app.Notification
+import android.content.ComponentName
+import android.content.Context
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.nava.domain.automation.CapturedNotification
@@ -23,7 +26,8 @@ import kotlinx.coroutines.launch
  */
 class NotificationIngestionFilter(
     private val permissionEvaluator: PermissionEvaluatorPort,
-    private val inbox: NotificationInboxPort
+    private val inbox: NotificationInboxPort,
+    private val onLiveIngested: (suspend (CapturedNotification) -> Unit)? = null
 ) {
     /**
      * Filters and conditionally ingests an incoming notification.
@@ -40,8 +44,24 @@ class NotificationIngestionFilter(
         postedAtEpochMs: Long,
         channelId: String? = null,
         lazyContentExtractor: () -> Pair<String, String>
+    ): Boolean = onPostedInternal(
+        notificationKey = notificationKey,
+        packageName = packageName,
+        postedAtEpochMs = postedAtEpochMs,
+        channelId = channelId,
+        isLiveEvent = true,
+        lazyContentExtractor = lazyContentExtractor
+    )
+
+    internal suspend fun onPostedInternal(
+        notificationKey: String,
+        packageName: String,
+        postedAtEpochMs: Long,
+        channelId: String? = null,
+        isLiveEvent: Boolean = true,
+        lazyContentExtractor: () -> Pair<String, String>
     ): Boolean {
-        if (notificationKey.isBlank() || packageName.isBlank()) {
+        if (notificationKey.isBlank() || packageName.isBlank() || packageName == SELF_PACKAGE_NAME) {
             return false
         }
 
@@ -82,12 +102,19 @@ class NotificationIngestionFilter(
         )
 
         inbox.ingest(captured)
+        if (isLiveEvent) {
+            onLiveIngested?.invoke(captured)
+        }
         return true
     }
 
     suspend fun onRemoved(notificationKey: String): Boolean {
         if (notificationKey.isBlank()) return false
         return inbox.removeByKey(notificationKey)
+    }
+
+    companion object {
+        private const val SELF_PACKAGE_NAME: String = "com.nava.app"
     }
 }
 
@@ -107,20 +134,68 @@ object NotificationServiceBinding {
     @Volatile
     private var inbox: NotificationInboxPort? = null
 
-    fun bind(evaluatorPort: PermissionEvaluatorPort, inboxPort: NotificationInboxPort) {
+    @Volatile
+    private var resyncActiveNotificationsHandler: (suspend () -> Unit)? = null
+
+    fun bind(
+        evaluatorPort: PermissionEvaluatorPort,
+        inboxPort: NotificationInboxPort,
+        onLiveIngested: (suspend (CapturedNotification) -> Unit)? = null
+    ) {
         evaluator = evaluatorPort
         inbox = inboxPort
-        filter = NotificationIngestionFilter(evaluatorPort, inboxPort)
+        filter = NotificationIngestionFilter(evaluatorPort, inboxPort, onLiveIngested)
     }
 
     fun bindCustomFilter(customFilter: NotificationIngestionFilter) {
         filter = customFilter
     }
 
+    fun registerResyncHandler(handler: suspend () -> Unit) {
+        resyncActiveNotificationsHandler = handler
+    }
+
+    fun unregisterResyncHandler() {
+        resyncActiveNotificationsHandler = null
+    }
+
+    /**
+     * Triggers an on-demand re-scan of active status-bar notifications through
+     * [NotificationIngestionFilter] so notifications posted before an app was granted
+     * `NOTIFICATION_READ` become available immediately without relaxing Default-Deny.
+     */
+    suspend fun requestActiveNotificationsResync() {
+        val handler = resyncActiveNotificationsHandler ?: return
+        try {
+            handler()
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            // Fail-closed: never propagate platform binder errors to callers.
+        }
+    }
+
+    /**
+     * Requests Android to rebind [NavaNotificationListenerService] when the app restarts or updates
+     * and the system has not yet re-invoked `onListenerConnected()`, ensuring active notifications
+     * from all permitted apps stay synchronized universally.
+     */
+    fun requestRebindIfUnbound(context: Context) {
+        if (resyncActiveNotificationsHandler != null) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runCatching {
+                NotificationListenerService.requestRebind(
+                    ComponentName(context.applicationContext, NavaNotificationListenerService::class.java)
+                )
+            }
+        }
+    }
+
     fun unbind() {
         filter = null
         evaluator = null
         inbox = null
+        resyncActiveNotificationsHandler = null
     }
 
     fun getFilter(): NotificationIngestionFilter? = filter
@@ -133,6 +208,28 @@ object NotificationServiceBinding {
  */
 class NavaNotificationListenerService : NotificationListenerService() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    override fun onCreate() {
+        super.onCreate()
+        NotificationServiceBinding.registerResyncHandler {
+            syncActiveNotificationsNow()
+        }
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        NotificationServiceBinding.registerResyncHandler {
+            syncActiveNotificationsNow()
+        }
+        serviceScope.launch {
+            syncActiveNotificationsNow()
+        }
+    }
+
+    override fun onListenerDisconnected() {
+        NotificationServiceBinding.unregisterResyncHandler()
+        super.onListenerDisconnected()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
@@ -149,12 +246,7 @@ class NavaNotificationListenerService : NotificationListenerService() {
                 packageName = pkg,
                 postedAtEpochMs = postTime,
                 channelId = channelId,
-                lazyContentExtractor = {
-                    val extras = sbn.notification?.extras
-                    val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-                    val text = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-                    title to text
-                }
+                lazyContentExtractor = { extractNotificationContent(sbn) }
             )
         }
     }
@@ -170,7 +262,48 @@ class NavaNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        NotificationServiceBinding.unregisterResyncHandler()
         super.onDestroy()
         serviceScope.cancel()
+    }
+
+    private suspend fun syncActiveNotificationsNow() {
+        val activeFilter = NotificationServiceBinding.getFilter() ?: return
+        val active = runCatching { activeNotifications }.getOrNull() ?: emptyArray()
+        for (sbn in active) {
+            val key = sbn?.key ?: continue
+            val pkg = sbn.packageName ?: continue
+            activeFilter.onPostedInternal(
+                notificationKey = key,
+                packageName = pkg,
+                postedAtEpochMs = sbn.postTime,
+                channelId = sbn.notification?.channelId,
+                isLiveEvent = false,
+                lazyContentExtractor = { extractNotificationContent(sbn) }
+            )
+        }
+    }
+
+    private fun extractNotificationContent(sbn: StatusBarNotification): Pair<String, String> {
+        val extras = sbn.notification?.extras
+        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            ?.takeIf { it.isNotBlank() }
+            ?: extras?.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString().orEmpty()
+        val bigText = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        val plainText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        val textLines = extras?.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+            ?.takeLast(5)
+            ?.joinToString(" | ")
+        val summaryText = extras?.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()
+            ?: extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
+        val text = when {
+            !bigText.isNullOrBlank() -> bigText
+            !textLines.isNullOrBlank() -> textLines
+            !plainText.isNullOrBlank() -> plainText
+            !summaryText.isNullOrBlank() -> summaryText
+            else -> ""
+        }
+        return title to text
     }
 }

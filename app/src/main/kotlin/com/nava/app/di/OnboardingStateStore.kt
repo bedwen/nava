@@ -18,7 +18,9 @@ import kotlinx.coroutines.flow.asStateFlow
 data class OnboardingState(
     val isOnboardingCompleted: Boolean = false,
     val isDefaultDenyAcknowledged: Boolean = false,
-    val selectedModelId: String? = null
+    val selectedModelId: String? = null,
+    val selectedFunctionModelId: String? = null,
+    val selectedEmbeddingModelId: String? = null
 )
 
 /**
@@ -136,6 +138,10 @@ class OnboardingStateStore(
 
     fun getSelectedModelId(): String? = _stateFlow.value.selectedModelId
 
+    fun getSelectedFunctionModelId(): String? = _stateFlow.value.selectedFunctionModelId
+
+    fun getSelectedEmbeddingModelId(): String? = _stateFlow.value.selectedEmbeddingModelId
+
     /**
      * Marks Default-Deny onboarding as acknowledged by the user.
      */
@@ -162,6 +168,35 @@ class OnboardingStateStore(
         val validated = validateModelIdOrNull(modelId)
         storage.putString(KEY_SELECTED_MODEL_ID, validated)
         publishUpdatedStateLocked()
+    }
+
+    /**
+     * Persists the selected `.litertlm` function-calling model identifier (or clears it when `null`).
+     */
+    fun setSelectedFunctionModelId(modelId: String?): OnboardingState = synchronized(lock) {
+        val validated = validateModelIdOrNull(modelId)
+        storage.putString(KEY_SELECTED_FUNCTION_MODEL_ID, validated)
+        publishUpdatedStateLocked()
+    }
+
+    /**
+     * Persists the selected `.litertlm` semantic embedding model identifier (or clears it when `null`).
+     */
+    fun setSelectedEmbeddingModelId(modelId: String?): OnboardingState = synchronized(lock) {
+        val validated = validateModelIdOrNull(modelId)
+        storage.putString(KEY_SELECTED_EMBEDDING_MODEL_ID, validated)
+        publishUpdatedStateLocked()
+    }
+
+    /**
+     * Routes an imported model ID to its corresponding role slot without overwriting [selectedModelId].
+     */
+    fun assignImportedModelByRole(modelId: String): OnboardingState = synchronized(lock) {
+        when (PinnedModelCatalog.roleForModelId(modelId)) {
+            PinnedModelRole.PRIMARY_LLM -> setSelectedModelId(modelId)
+            PinnedModelRole.FUNCTION_ROUTER -> setSelectedFunctionModelId(modelId)
+            PinnedModelRole.SEMANTIC_EMBEDDING -> setSelectedEmbeddingModelId(modelId)
+        }
     }
 
     /**
@@ -197,10 +232,16 @@ class OnboardingStateStore(
         val acknowledged = storage.getBoolean(KEY_DEFAULT_DENY_ACKNOWLEDGED, false)
         val rawModelId = storage.getString(KEY_SELECTED_MODEL_ID, null)
         val safeModelId = runCatching { validateModelIdOrNull(rawModelId) }.getOrNull()
+        val rawFunctionModelId = storage.getString(KEY_SELECTED_FUNCTION_MODEL_ID, null)
+        val safeFunctionModelId = runCatching { validateModelIdOrNull(rawFunctionModelId) }.getOrNull()
+        val rawEmbeddingModelId = storage.getString(KEY_SELECTED_EMBEDDING_MODEL_ID, null)
+        val safeEmbeddingModelId = runCatching { validateModelIdOrNull(rawEmbeddingModelId) }.getOrNull()
         return OnboardingState(
             isOnboardingCompleted = completed,
             isDefaultDenyAcknowledged = acknowledged,
-            selectedModelId = safeModelId
+            selectedModelId = safeModelId,
+            selectedFunctionModelId = safeFunctionModelId,
+            selectedEmbeddingModelId = safeEmbeddingModelId
         )
     }
 
@@ -221,6 +262,8 @@ class OnboardingStateStore(
         const val KEY_ONBOARDING_COMPLETED: String = "onboarding_completed"
         const val KEY_DEFAULT_DENY_ACKNOWLEDGED: String = "default_deny_acknowledged"
         const val KEY_SELECTED_MODEL_ID: String = "selected_model_id"
+        const val KEY_SELECTED_FUNCTION_MODEL_ID: String = "selected_function_model_id"
+        const val KEY_SELECTED_EMBEDDING_MODEL_ID: String = "selected_embedding_model_id"
 
         private val SAFE_MODEL_ID_REGEX: Regex = Regex("^[A-Za-z0-9._-]{1,64}$")
     }

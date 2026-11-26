@@ -114,6 +114,20 @@ class RuleIntentResolver(
             )
         }
 
+        if (rulePack.conversationalPatterns.isNotEmpty()) {
+            val orderedConversational = rulePack.conversationalPatterns.sortedByDescending { it.priority }
+            for (convPattern in orderedConversational) {
+                val regex = getOrCompileRegex(convPattern.regexPattern) ?: continue
+                if (regex.matches(normalized.matchKey)) {
+                    return ResolutionResult.ConversationalReply(
+                        tier = ResolutionTier.TIER_1_RULE,
+                        replyText = convPattern.replyText,
+                        languageTag = rulePack.languageTag
+                    )
+                }
+            }
+        }
+
         return ResolutionResult.NoMatch
     }
 

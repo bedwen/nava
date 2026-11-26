@@ -14,7 +14,7 @@ object Gemma4InputSanitizer {
     private const val CLOSE = "(?:>|\u3009|\u27E9|\u203A)"
     private const val PIPE = "(?:\\||\u00A6|\u2223|\u2758|\u2502|\u2503)"
     private const val TOKEN_NAMES =
-        "(?:turn|start_of_turn|end_of_turn|tool_call|tool_response|channel|think|audio|eot|escape|image|video|file)"
+        "(?:turn|start_of_turn|end_of_turn|tool_call|tool_response|call|tool|channel|think|audio|eot|escape|image|video|file)"
 
     private val CONTROL_TOKEN_REGEX = Regex(
         pattern = buildString {
@@ -28,7 +28,7 @@ object Gemma4InputSanitizer {
             append("|")
             append(OPEN).append(PIPE).append("(?:\"|\\\\\")").append(PIPE).append(CLOSE)
             append("|")
-            append(OPEN).append("(?:bos|eos|start_of_turn|end_of_turn)").append(CLOSE)
+            append(OPEN).append("(?:bos|eos|start_of_turn|end_of_turn|start_function_call|end_function_call|start_function_declaration|end_function_declaration|start_function_response|end_function_response|escape)").append(CLOSE)
         },
         option = RegexOption.IGNORE_CASE
     )

@@ -1,5 +1,6 @@
 package com.nava.domain.usecase
 
+import com.nava.domain.ai.ConversationTurn
 import com.nava.domain.ai.IntentRequest
 import com.nava.domain.ai.IntentResolver
 import com.nava.domain.ai.ResolutionResult
@@ -29,7 +30,8 @@ class ProcessQueryUseCase(
         appLocaleTag: String,
         targetContextId: String = "default",
         issuedAtEpochMs: Long,
-        provenance: DataProvenance = DataProvenance.USER_UTTERANCE
+        provenance: DataProvenance = DataProvenance.USER_UTTERANCE,
+        conversationHistory: List<ConversationTurn> = emptyList()
     ): ResolutionResult {
         if (provenance != DataProvenance.USER_UTTERANCE) {
             throw SecurityException(
@@ -44,6 +46,20 @@ class ProcessQueryUseCase(
             )
         }
 
+        val sanitizedHistory = if (conversationHistory.isEmpty()) {
+            emptyList()
+        } else {
+            conversationHistory.mapNotNull { turn ->
+                val userText = Gemma4InputSanitizer.sanitize(turn.userUtterance).trim()
+                val assistantText = Gemma4InputSanitizer.sanitize(turn.assistantReply).trim()
+                if (userText.isNotEmpty() && assistantText.isNotEmpty()) {
+                    ConversationTurn(userUtterance = userText, assistantReply = assistantText)
+                } else {
+                    null
+                }
+            }
+        }
+
         val detectedLanguage = languageDetector.detect(sanitizedUtterance, appLocaleTag)
         val normalizedText = textNormalizer.normalize(sanitizedUtterance, detectedLanguage.bcp47Tag)
 
@@ -54,7 +70,8 @@ class ProcessQueryUseCase(
             languageHint = detectedLanguage,
             provenance = provenance,
             issuedAtEpochMs = issuedAtEpochMs,
-            targetContextId = targetContextId
+            targetContextId = targetContextId,
+            conversationHistory = sanitizedHistory
         )
 
         val availableTools = toolRegistry.allMetadata()

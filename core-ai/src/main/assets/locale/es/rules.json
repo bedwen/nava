@@ -98,6 +98,61 @@
       },
       "staticSlots": {},
       "priority": 100
+    },
+    {
+      "patternId": "es_schedule_reminder_in_min",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:por favor )?recuerdame en (\\d{1,4}) (?:minutos?|mins?) ([a-z0-9][a-z0-9 .,'_-]{0,80})$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "es_summarize_notifications_limit",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:por favor )?(?:resumir|resume|leer|lee|mostrar|muestra) (?:las |mis )?(?:ultimas |recientes )?(\\d{1,2}) notificaciones?(?: del telefono)?$",
+      "slotMappings": {
+        "limit": "1"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "es_summarize_notifications",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:por favor )?(?:resumir|resume|leer|lee|revisar|revisa|mostrar|muestra) (?:las |mis |todas las )?(?:ultimas |recientes |actuales |nuevas )?notificaciones?(?: del telefono| en mi telefono)?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 110
+    }
+  ],
+  "conversationalPatterns": [
+    {
+      "patternId": "es_greeting",
+      "regexPattern": "^(?:hola|buenos dias|buenas tardes|buenas noches)(?: nava)?[.!?]?$",
+      "replyText": "Hola. Soy Nava. ¿En qué puedo ayudarte?",
+      "priority": 100
+    },
+    {
+      "patternId": "es_identity",
+      "regexPattern": "^(?:quien eres|como te llamas|que es nava)[.!?]?$",
+      "replyText": "Soy Nava, tu asistente Android completamente local y sin conexión.",
+      "priority": 100
+    },
+    {
+      "patternId": "es_capabilities",
+      "regexPattern": "^(?:que puedes hacer|ayuda)[.!?]?$",
+      "replyText": "Puedo configurar alarmas y temporizadores, gestionar el modo enfoque y ayudarte sin conexión con calendario, notas, bóveda y borradores.",
+      "priority": 100
+    },
+    {
+      "patternId": "es_thanks",
+      "regexPattern": "^(?:gracias|muchas gracias)(?: nava)?[.!?]?$",
+      "replyText": "De nada. Avísame si necesitas algo más.",
+      "priority": 100
     }
   ]
 }

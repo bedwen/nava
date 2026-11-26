@@ -88,5 +88,14 @@ class AndroidResourceMessageTemplateProvider(
         MessageKey.ERROR_NOT_FOUND -> R.string.msg_error_not_found
         MessageKey.ERROR_VAULT_LOCKED -> R.string.msg_error_vault_locked
         MessageKey.ERROR_SAF_GRANT_MISSING -> R.string.msg_error_saf_grant_missing
+        MessageKey.ACTION_REMINDER_SCHEDULED -> R.string.msg_action_reminder_scheduled
+        MessageKey.ACTION_REMINDER_CANCELLED -> R.string.msg_action_reminder_cancelled
+        MessageKey.ACTION_BRIEFING_READY -> R.string.msg_action_briefing_ready
+        MessageKey.INFO_NO_PERMITTED_NOTIFICATION_APPS -> R.string.msg_info_no_permitted_notification_apps
+        MessageKey.ACTION_NOTES_SEARCHED -> R.string.msg_action_notes_searched
+        MessageKey.ACTION_VOICE_NOTE_STRUCTURED -> R.string.msg_action_voice_note_structured
+        MessageKey.ACTION_WATCHER_CREATED -> R.string.msg_action_watcher_created
+        MessageKey.ACTION_WATCHER_DELETED -> R.string.msg_action_watcher_deleted
+        MessageKey.ACTION_WATCHERS_LISTED -> R.string.msg_action_watchers_listed
     }
 }

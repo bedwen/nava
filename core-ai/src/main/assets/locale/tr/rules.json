@@ -16,7 +16,7 @@
     {
       "patternId": "tr_set_alarm_hhmm_period",
       "toolName": "set_alarm",
-      "regexPattern": "^(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2}):(\\d{2})(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
+      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})[:.](\\d{2})(?:'?(?:a|e|ya|ye))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
       "slotMappings": {
         "period_keyword": "1",
         "hour": "2",
@@ -29,7 +29,7 @@
     {
       "patternId": "tr_set_alarm_hour_period",
       "toolName": "set_alarm",
-      "regexPattern": "^(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
+      "regexPattern": "^(?:yarin )?(?:(sabah|aksam|gece) )?(?:saat )?(\\d{1,2})(?:'?(?:a|e|ya|ye))?(?: icin)? (?:([a-z0-9]{1,24}) )?alarmi? (?:kur|ekle|ayarla)$",
       "slotMappings": {
         "period_keyword": "1",
         "hour": "2",
@@ -110,6 +110,108 @@
       },
       "staticSlots": {},
       "priority": 100
+    },
+    {
+      "patternId": "tr_schedule_reminder_in_min",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(\\d{1,4}) (?:dakika|dk) (?:sonra|icinde) ([a-z0-9][a-z0-9 .,'_-]{0,80}) (?:hatirlat|hatirlatici kur|hatirlatma kur)$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "tr_schedule_reminder_icin",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(\\d{1,4}) (?:dakika|dk) (?:sonra|icinde) ([a-z0-9][a-z0-9 .,'_-]{0,80}) icin hatirlatici (?:kur|ekle|ayarla)$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 118
+    },
+    {
+      "patternId": "tr_summarize_notifications_limit",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:lutfen )?(?:(?:telefondaki|cihazdaki) )?son (\\d{1,2}) (?:bildirimi|bildirimimi|bildirimleri|bildirimlerimi) (?:ozetle|oku|goster|listele)$",
+      "slotMappings": {
+        "limit": "1"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "tr_summarize_notifications",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:lutfen )?(?:(?:telefondaki|cihazdaki) )?(?:(?:mevcut|gelen|son|yeni|okunmamis|tum|butun) )?(?:bildirimi|bildirimimi|bildirimleri|bildirimlerimi) (?:oku ve ozetle|ozetle ve oku|ozetle|oku|goster|listele)$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 110
     }
-  ]
+  ],
+  "conversationalPatterns": [
+    {
+      "patternId": "tr_greeting",
+      "regexPattern": "^(?:merhaba|selam|selamlar|gunaydin|iyi gunler|iyi aksamlar|iyi geceler)(?: nava)?[.!?]?$",
+      "replyText": "Merhaba. Ben Nava. Size nasıl yardımcı olabilirim?",
+      "priority": 100
+    },
+    {
+      "patternId": "tr_how_are_you",
+      "regexPattern": "^(?:(?:merhaba|selam|selamlar|gunaydin|iyi gunler|iyi aksamlar) )?(?:nasilsin|naber|ne haber|iyi misin)(?: nava)?[.!?]?$",
+      "replyText": "İyiyim, teşekkür ederim. Tüm işlemleriniz cihazınızda ve hazır. Nasıl yardımcı olabilirim?",
+      "priority": 100
+    },
+    {
+      "patternId": "tr_identity",
+      "regexPattern": "^(?:sen kimsin|adin ne|ismin ne|kimsin|nava nedir|nava kimdir)[.!?]?$",
+      "replyText": "Ben Nava, tamamen cihaz içi ve çevrimdışı çalışan Android asistanınızım.",
+      "priority": 100
+    },
+    {
+      "patternId": "tr_capabilities",
+      "regexPattern": "^(?:neler yapabilirsin|ne yapabilirsin|yardim|bana ne konuda yardimci olabilirsin)[.!?]?$",
+      "replyText": "Alarm ve zamanlayıcı kurabilir, odak modunu yönetebilir, takvim, notlar, güvenli kasa ve mesaj taslaklarınızda çevrimdışı yardımcı olabilirim.",
+      "priority": 100
+    },
+    {
+      "patternId": "tr_thanks",
+      "regexPattern": "^(?:tesekkurler|tesekkur ederim|sag ol|sagol|eyvallah)(?: nava)?[.!?]?$",
+      "replyText": "Rica ederim. Başka bir konuda yardımcı olabilir miyim?",
+      "priority": 100
+    }
+  ],
+  "toolHints": {
+    "notes_create": ["not", "notu", "notlar", "notlarim", "notta", "notum", "yaz", "yazar", "kaydet", "ekle"],
+    "notes_read": ["not", "notlari", "notlarimi", "notu", "oku", "goster", "listele"],
+    "notes_search": ["not", "notlar", "notlarimda", "ara", "bul", "gecen", "hafiza", "ilac", "doktor"],
+    "notes_delete": ["not", "notu", "sil"],
+    "vault_write": ["kasa", "kasaya", "gizli", "sifre", "sakla"],
+    "vault_read": ["kasa", "kasadaki", "gizli", "sifre"],
+    "vault_delete": ["kasa", "kasadan", "sil"],
+    "calendar_create": ["takvim", "takvime", "takvimde", "etkinlik", "toplanti", "hatirlatici", "randevu", "dogum"],
+    "calendar_query": ["takvim", "takvimde", "etkinlik", "toplanti", "program", "bugun", "yarin"],
+    "calendar_modify": ["takvim", "etkinlik", "toplanti", "degistir", "guncelle", "ertele"],
+    "set_alarm": ["alarm", "alarmi", "uyandir", "sabah", "saat"],
+    "set_timer": ["zamanlayici", "sayac", "dakika", "saniye"],
+    "create_sms_draft": ["mesaj", "sms", "taslak", "gonder"],
+    "dial_call": ["ara", "arama", "telefon", "numara"],
+    "place_call": ["ara", "arama", "telefon", "numara"],
+    "set_dnd": ["rahatsiz", "sessiz", "odak"],
+    "set_volume": ["ses", "sesi", "seviye", "kis", "ac"],
+    "launch_app": ["uygulama", "uygulamasini", "baslat", "calistir"],
+    "summarize_notifications": ["bildirim", "bildirimler", "bildirimleri", "ozet", "ozetle"],
+    "schedule_reminder": ["hatirlat", "hatirlatici", "hatirlatma", "animsat", "unutma"],
+    "cancel_reminder": ["hatirlatici", "hatirlatma", "iptal", "sil", "kaldir"],
+    "propose_routine": ["rutin", "otomasyon", "kural", "olustur", "otomatik"],
+    "daily_briefing": ["brifing", "sabah", "gunluk", "bugun"],
+    "create_notification_watcher": ["haber", "uyar", "uyari", "nobetci", "gelirse", "gelince", "takip", "mail", "eposta", "sms", "bildirim"],
+    "manage_notification_watchers": ["nobetci", "nobetciler", "uyari", "uyarilar", "takip"],
+    "saf_read": ["dosya", "dosyalar", "klasor", "belge"],
+    "saf_write": ["dosya", "klasor", "belge", "kaydet"],
+    "saf_delete": ["dosya", "belge", "sil"]
+  }
 }

@@ -8,6 +8,7 @@ import java.security.GeneralSecurityException
 import java.security.InvalidAlgorithmParameterException
 import java.security.KeyStore
 import java.security.ProviderException
+import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
@@ -22,21 +23,41 @@ class AndroidKeystoreKeyProvider : CryptoKeyProvider {
     private val keyLock = Any()
 
     override fun getOrCreateDbMasterKey(): SecretKey {
-        return getOrCreateKey(
-            alias = KeyAliases.DB_MASTER_KEY,
-            algorithm = KeyProperties.KEY_ALGORITHM_AES
-        ) { strongBox ->
-            KeyGenParameterSpec.Builder(
-                KeyAliases.DB_MASTER_KEY,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        return synchronized(keyLock) {
+            val keyStore = loadKeyStore()
+            if (keyStore.containsAlias(KeyAliases.DB_MASTER_KEY)) {
+                val existing = keyStore.getKey(KeyAliases.DB_MASTER_KEY, null) as? SecretKey
+                if (existing != null) {
+                    return@synchronized existing
+                }
+            }
+
+            val fallbackTiers = listOf(
+                true to true,   // 1) StrongBox=true, unlockedDeviceRequired=true
+                false to true,  // 2) StrongBox=false (TEE), unlockedDeviceRequired=true
+                false to false  // 3) StrongBox=false (TEE), unlockedDeviceRequired=false
             )
-                .setKeySize(AES_KEY_SIZE_BITS)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setRandomizedEncryptionRequired(true)
-                .setUnlockedDeviceRequired(true)
-                .setIsStrongBoxBacked(strongBox)
-                .build()
+
+            var lastFailure: Exception? = null
+            for ((strongBox, unlockedRequired) in fallbackTiers) {
+                try {
+                    val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                    generator.init(buildDbMasterKeySpec(strongBox, unlockedRequired))
+                    val key = generator.generateKey()
+                    if (verifyAesKeyUsable(key)) {
+                        return@synchronized key
+                    } else {
+                        deleteAliasQuietly(loadKeyStore(), KeyAliases.DB_MASTER_KEY)
+                    }
+                } catch (e: Exception) {
+                    deleteAliasQuietly(loadKeyStore(), KeyAliases.DB_MASTER_KEY)
+                    lastFailure = e
+                }
+            }
+
+            throw lastFailure ?: GeneralSecurityException(
+                "Failed to provision usable DB master key across all hardware and unlock tiers"
+            )
         }
     }
 
@@ -140,6 +161,47 @@ class AndroidKeystoreKeyProvider : CryptoKeyProvider {
         return generator.generateKey()
     }
 
+    private fun buildDbMasterKeySpec(
+        strongBox: Boolean,
+        unlockedRequired: Boolean
+    ): KeyGenParameterSpec {
+        return KeyGenParameterSpec.Builder(
+            KeyAliases.DB_MASTER_KEY,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setKeySize(AES_KEY_SIZE_BITS)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true)
+            .setUnlockedDeviceRequired(unlockedRequired)
+            .setIsStrongBoxBacked(strongBox)
+            .build()
+    }
+
+    private fun verifyAesKeyUsable(key: SecretKey): Boolean {
+        return try {
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            true
+        } catch (_: GeneralSecurityException) {
+            false
+        } catch (_: ProviderException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun deleteAliasQuietly(keyStore: KeyStore, alias: String) {
+        try {
+            if (keyStore.containsAlias(alias)) {
+                keyStore.deleteEntry(alias)
+            }
+        } catch (_: Exception) {
+            // Ignored
+        }
+    }
+
     private fun loadKeyStore(): KeyStore {
         return KeyStore.getInstance(ANDROID_KEYSTORE).apply {
             load(null)
@@ -148,6 +210,7 @@ class AndroidKeystoreKeyProvider : CryptoKeyProvider {
 
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val AES_KEY_SIZE_BITS = 256
         private const val HMAC_KEY_SIZE_BITS = 256
         private const val AUTH_VALIDITY_PER_USE_SECONDS = 0

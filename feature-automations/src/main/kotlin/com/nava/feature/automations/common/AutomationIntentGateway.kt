@@ -7,9 +7,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.AlarmClock
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import java.text.Normalizer
 import java.util.Locale
 
 /**
@@ -21,6 +23,14 @@ sealed interface PlatformDispatchResult {
     data class MissingPermission(val permission: String) : PlatformDispatchResult
     data class Unavailable(val reason: String) : PlatformDispatchResult
 }
+
+/**
+ * Metadata representation of an installed, launchable application.
+ */
+data class InstalledAppInfo(
+    val packageName: String,
+    val displayLabel: String
+)
 
 /**
  * Thin, JVM-testable abstraction over allowlisted Android `Intent` dispatches and runtime/special
@@ -63,6 +73,15 @@ interface AutomationIntentGateway {
     fun resolveLaunchablePackage(appNameOrPackage: String): String?
 
     fun dispatchLaunchApp(packageName: String): PlatformDispatchResult
+
+    fun listLaunchableApps(): List<InstalledAppInfo> = emptyList()
+
+    fun canPostNotifications(): Boolean = true
+
+    companion object {
+        fun foldAppLabelForMatch(text: String): String =
+            AndroidAutomationIntentGateway.foldAppLabelForMatch(text)
+    }
 }
 
 /**
@@ -86,6 +105,35 @@ class AndroidAutomationIntentGateway(
     override fun isNotificationListenerEnabled(): Boolean {
         val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(context)
         return context.packageName in enabledPackages
+    }
+
+    override fun canPostNotifications(): Boolean {
+        val notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        if (!notificationsEnabled) return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            hasRuntimePermission(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            true
+        }
+    }
+
+    override fun listLaunchableApps(): List<InstalledAppInfo> {
+        val pm = context.packageManager
+        val launcherQuery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val candidates = pm.queryIntentActivities(launcherQuery, 0)
+        val seen = mutableSetOf<String>()
+        val result = mutableListOf<InstalledAppInfo>()
+
+        for (info in candidates) {
+            val pkg = info.activityInfo?.packageName ?: continue
+            if (!isValidPackageName(pkg) || pkg == context.packageName) continue
+            if (seen.add(pkg)) {
+                val label = info.loadLabel(pm).toString().trim()
+                val displayLabel = if (label.isNotEmpty()) label else pkg
+                result.add(InstalledAppInfo(packageName = pkg, displayLabel = displayLabel))
+            }
+        }
+        return result.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayLabel })
     }
 
     override fun dispatchSetAlarm(
@@ -173,6 +221,7 @@ class AndroidAutomationIntentGateway(
         if (trimmed.isEmpty()) return null
         val pm = context.packageManager
 
+        // Priority 1: exact valid installed packageName via getLaunchIntentForPackage
         if (isValidPackageName(trimmed)) {
             if (pm.getLaunchIntentForPackage(trimmed) != null) {
                 return trimmed
@@ -181,16 +230,40 @@ class AndroidAutomationIntentGateway(
 
         val launcherQuery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val candidates = pm.queryIntentActivities(launcherQuery, 0)
-        val targetLower = trimmed.lowercase(Locale.ROOT)
+        val queryFolded = foldAppLabelForMatch(trimmed)
+        if (queryFolded.isEmpty()) return null
+
+        data class CandidateApp(val packageName: String, val foldedLabel: String)
+        val apps = mutableListOf<CandidateApp>()
+        val seen = mutableSetOf<String>()
+
         for (info in candidates) {
             val pkg = info.activityInfo?.packageName ?: continue
             if (!isValidPackageName(pkg)) continue
-            val label = info.loadLabel(pm).toString().trim().lowercase(Locale.ROOT)
-            if (label.isEmpty()) continue
-            if (label == targetLower) {
-                return pkg
+            if (!seen.add(pkg)) continue
+            val label = info.loadLabel(pm).toString().trim()
+            val folded = foldAppLabelForMatch(label)
+            apps.add(CandidateApp(packageName = pkg, foldedLabel = folded))
+        }
+
+        // Priority 2: exact folded display label match
+        val exactMatch = apps.firstOrNull { it.foldedLabel == queryFolded }
+        if (exactMatch != null) {
+            return exactMatch.packageName
+        }
+
+        // Priority 3: folded prefix/word match when length >= 3
+        if (queryFolded.length >= 3) {
+            val prefixMatch = apps.firstOrNull { app ->
+                app.foldedLabel.length >= 3 && (
+                    app.foldedLabel.startsWith(queryFolded) || queryFolded.startsWith(app.foldedLabel)
+                )
+            }
+            if (prefixMatch != null) {
+                return prefixMatch.packageName
             }
         }
+
         return null
     }
 
@@ -226,6 +299,17 @@ class AndroidAutomationIntentGateway(
         private val ANDROID_PACKAGE_REGEX: Regex = Regex(
             """^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+$"""
         )
+        private val DIACRITICS_REGEX: Regex = Regex("""\p{Mn}+""")
+
+        fun foldAppLabelForMatch(text: String): String {
+            if (text.isBlank()) return ""
+            val preprocessed = text
+                .replace("\u0130", "i")
+                .replace("\u0131", "i")
+            val normalized = Normalizer.normalize(preprocessed, Normalizer.Form.NFKD)
+            val stripped = DIACRITICS_REGEX.replace(normalized, "")
+            return stripped.lowercase(Locale.ROOT).trim()
+        }
 
         fun isValidDialableNumber(value: String): Boolean {
             val trimmed = value.trim()

@@ -1,12 +1,19 @@
 package com.nava.feature.automations.applaunch
 
 import com.nava.domain.ai.SlotValueAst
+import com.nava.domain.security.AtomicCapability
 import com.nava.domain.security.AuditLogEntry
 import com.nava.domain.security.AuditLogPort
 import com.nava.domain.security.CapabilityToken
+import com.nava.domain.security.ConfirmationLevel
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.FirewallDecision
+import com.nava.domain.security.PermissionEvaluatorPort
+import com.nava.domain.security.PermissionProfile
+import com.nava.domain.security.RuleActionSpec
+import com.nava.domain.security.RuleApprovalState
 import com.nava.domain.security.RuleCapabilityGrant
+import com.nava.domain.security.RuleTriggerSpec
 import com.nava.domain.security.SecurityFirewallPort
 import com.nava.domain.security.SensitiveSlotKind
 import com.nava.domain.security.Tainted
@@ -108,9 +115,46 @@ class AppLaunchToolTest {
         override suspend fun queryRecent(limit: Int): List<AuditLogEntry> = records.takeLast(limit)
     }
 
+    private class FakePermissionEvaluator : PermissionEvaluatorPort {
+        val targetLevels = mutableMapOf<String, ConfirmationLevel>()
+        val explicitlyBoundTargets = mutableSetOf<String>()
+
+        override suspend fun getProfileForTarget(targetId: String): PermissionProfile {
+            return if (targetId in explicitlyBoundTargets) {
+                val level = targetLevels[targetId] ?: ConfirmationLevel.DISABLED
+                if (level.isAllowed) {
+                    PermissionProfile.trustedSystemAutomation().withCapability(AtomicCapability.APP_LAUNCH, level)
+                } else {
+                    PermissionProfile.defaultDeny()
+                }
+            } else {
+                PermissionProfile.defaultDeny()
+            }
+        }
+
+        override suspend fun evaluateCapability(
+            targetId: String,
+            capability: AtomicCapability
+        ): ConfirmationLevel {
+            return targetLevels[targetId] ?: ConfirmationLevel.DISABLED
+        }
+
+        override suspend fun listProfiles(): List<PermissionProfile> {
+            val defaultDenyTargets = explicitlyBoundTargets.filter { targetLevels[it] == ConfirmationLevel.DISABLED }.toSet()
+            return listOf(
+                PermissionProfile.defaultDeny().copy(assignedTargets = defaultDenyTargets)
+            )
+        }
+
+        override suspend fun saveProfile(profile: PermissionProfile) {}
+        override suspend fun assignTargetToProfile(targetId: String, profileId: String) {}
+        override suspend fun deleteProfile(profileId: String) {}
+    }
+
     private val fakeGateway = FakeIntentGateway()
     private val fakeFirewall = FakeFirewall()
     private val fakeAudit = FakeAuditLog()
+    private val fakeEvaluator = FakePermissionEvaluator()
     private var simulatedTime: Long = 1_000_000L
 
     private val tool = AppLaunchTool(
@@ -118,6 +162,14 @@ class AppLaunchToolTest {
         firewall = fakeFirewall,
         auditLog = fakeAudit,
         clock = { simulatedTime }
+    )
+
+    private val toolWithEvaluator = AppLaunchTool(
+        intentGateway = fakeGateway,
+        firewall = fakeFirewall,
+        auditLog = fakeAudit,
+        clock = { simulatedTime },
+        permissionEvaluator = fakeEvaluator
     )
 
     private fun testContext(): ToolExecutionContext = ToolExecutionContext(
@@ -291,5 +343,168 @@ class AppLaunchToolTest {
         val failure = deniedResult as ToolResult.Failure
         assertTrue(failure.isSecurityViolation)
         assertEquals("BLOCKED_APP_LAUNCH", failure.errorCode)
+    }
+
+    @Test
+    fun launchAppFallsBackFromUnresolvablePackageNameToValidAppName() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.launchResult = PlatformDispatchResult.Dispatched()
+
+        val args = mapOf(
+            "package_name" to Tainted.fromUserUtterance(
+                SlotValueAst.StringValue("com.nonexistent.hallucinated"),
+                SensitiveSlotKind.PACKAGE_NAME
+            ),
+            "app_name" to Tainted.fromUserUtterance(
+                SlotValueAst.StringValue("Calculator"),
+                SensitiveSlotKind.TEXT_BODY
+            )
+        )
+
+        val result = tool.execute(testContext(), args)
+        assertTrue(result is ToolResult.Success)
+        val success = result as ToolResult.Success
+        assertEquals("com.android.calculator2", success.outputValues["package_name"])
+        assertEquals("com.android.calculator2", fakeGateway.lastLaunchedPackage)
+    }
+
+    @Test
+    fun launchAppCombinesWorstProvenanceWhenFallbackAppNameResolvesWithUntrustedPackageArg() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.launchResult = PlatformDispatchResult.Dispatched()
+
+        // package_name came from untrusted source, app_name was user utterance
+        val args = mapOf(
+            "package_name" to Tainted.fromUntrustedExternal(
+                SlotValueAst.StringValue("com.nonexistent.malicious"),
+                SensitiveSlotKind.PACKAGE_NAME,
+                sourceLabel = "notification:com.chat"
+            ),
+            "app_name" to Tainted.fromUserUtterance(
+                SlotValueAst.StringValue("Calculator"),
+                SensitiveSlotKind.TEXT_BODY
+            )
+        )
+
+        // Must escalate to confirmation because package_name was untrusted and contributed to the execution context
+        val result = tool.execute(testContext(), args)
+        assertTrue(result is ToolResult.ConfirmationRequired)
+        val conf = result as ToolResult.ConfirmationRequired
+        assertEquals("com.android.calculator2", conf.targetId)
+        assertTrue(conf.hasUntrustedHighRiskSlot)
+        assertEquals(DataProvenance.UNTRUSTED_EXTERNAL, conf.canonicalArguments["package_name"]?.provenance)
+    }
+
+    @Test
+    fun launchAppDeniesWhenResolvedPackageExplicitlyDisabledEvenIfSystemAppLaunchIsAuto() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.installedApps["com.bank.app"] = "Bank"
+        fakeGateway.lastLaunchedPackage = null
+
+        // System app launch is AUTO
+        fakeEvaluator.targetLevels[ToolTargetIds.APP_LAUNCH] = ConfirmationLevel.AUTO
+        // But com.bank.app is explicitly bound to DEFAULT_DENY (DISABLED)
+        fakeEvaluator.explicitlyBoundTargets.add("com.bank.app")
+        fakeEvaluator.targetLevels["com.bank.app"] = ConfirmationLevel.DISABLED
+
+        // Fallback from blank package_name to app_name="Bank"
+        val args = mapOf(
+            "package_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("")),
+            "app_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Bank"))
+        )
+
+        val result = toolWithEvaluator.execute(testContext(), args)
+        assertTrue(result is ToolResult.Failure)
+        val failure = result as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("PERMISSION_DENIED", failure.errorCode)
+        assertEquals(null, fakeGateway.lastLaunchedPackage)
+
+        val lastAudit = fakeAudit.records.last()
+        assertEquals("com.bank.app", lastAudit.targetId)
+        assertEquals("PERMISSION_DENIED", lastAudit.decision)
+    }
+
+    @Test
+    fun launchAppRejectsUnattendedRoutineWhenPackageRequiresPromptCard() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.installedApps["com.camera.app"] = "Camera"
+        fakeGateway.lastLaunchedPackage = null
+
+        fakeEvaluator.explicitlyBoundTargets.add("com.camera.app")
+        fakeEvaluator.targetLevels["com.camera.app"] = ConfirmationLevel.PROMPT_CARD
+
+        val args = mapOf(
+            "app_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Camera"))
+        )
+
+        val grant = RuleCapabilityGrant(
+            grantId = "grant_app_launch",
+            ruleId = "rule_app_launch",
+            triggerSpec = RuleTriggerSpec("time", mapOf("hour" to "8", "minute" to "0")),
+            staticActions = listOf(
+                RuleActionSpec(
+                    toolName = AutomationToolNames.LAUNCH_APP,
+                    requiredCapability = AtomicCapability.APP_LAUNCH
+                )
+            ),
+            approvalState = RuleApprovalState.APPROVED_ACTIVE,
+            sealHmacHex = "sealed_app_launch_hmac"
+        )
+        val unattendedContext = ToolExecutionContext(
+            requestId = "req-unattended-launch",
+            capabilityToken = null,
+            ruleGrant = grant,
+            targetId = ToolTargetIds.ROUTINES,
+            languageTag = "en",
+            issuedAtEpochMs = simulatedTime,
+            isUnattendedBackground = true
+        )
+        val result = toolWithEvaluator.execute(unattendedContext, args)
+
+        assertTrue(result is ToolResult.Failure)
+        val failure = result as ToolResult.Failure
+        assertTrue(failure.isSecurityViolation)
+        assertEquals("UNATTENDED_EXECUTION_FORBIDDEN", failure.errorCode)
+        assertEquals(null, fakeGateway.lastLaunchedPackage)
+    }
+
+    @Test
+    fun launchAppRequestsConfirmationWhenPackageRequiresPromptCardAndInteractiveUserUnconfirmed() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.installedApps["com.camera.app"] = "Camera"
+
+        fakeEvaluator.explicitlyBoundTargets.add("com.camera.app")
+        fakeEvaluator.targetLevels["com.camera.app"] = ConfirmationLevel.PROMPT_CARD
+
+        val args = mapOf(
+            "app_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Camera"))
+        )
+
+        val result = toolWithEvaluator.execute(testContext().copy(isUserConfirmed = false), args)
+        assertTrue(result is ToolResult.ConfirmationRequired)
+        val conf = result as ToolResult.ConfirmationRequired
+        assertEquals("com.camera.app", conf.targetId)
+
+        // Confirmed context allows execution
+        val confirmedResult = toolWithEvaluator.execute(testContext().copy(isUserConfirmed = true), args)
+        assertTrue(confirmedResult is ToolResult.Success)
+        assertEquals("com.camera.app", fakeGateway.lastLaunchedPackage)
+    }
+
+    @Test
+    fun launchAppSucceedsWhenUnboundPackageInheritsAutoFromSystemAppLaunch() = runBlocking {
+        fakeFirewall.outboundDecision = FirewallDecision.Authorized
+        fakeGateway.installedApps["com.unbound.app"] = "Unbound"
+
+        fakeEvaluator.targetLevels[ToolTargetIds.APP_LAUNCH] = ConfirmationLevel.AUTO
+
+        val args = mapOf(
+            "app_name" to Tainted.fromUserUtterance(SlotValueAst.StringValue("Unbound"))
+        )
+
+        val result = toolWithEvaluator.execute(testContext(), args)
+        assertTrue(result is ToolResult.Success)
+        assertEquals("com.unbound.app", fakeGateway.lastLaunchedPackage)
     }
 }

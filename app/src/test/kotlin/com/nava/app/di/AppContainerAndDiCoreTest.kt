@@ -79,7 +79,7 @@ class AppContainerAndDiCoreTest {
         assertFalse("Model weights must NEVER be loaded at startup", container.llmEngine.isModelLoaded())
 
         val registeredNames = container.toolRegistry.allTools().map { it.metadata.name }.toSet()
-        assertEquals(21, registeredNames.size)
+        assertEquals(AutomationToolNames.ALL.size, registeredNames.size)
         assertEquals(AutomationToolNames.ALL, registeredNames)
 
         assertSame(container.permissionProfileManager, NotificationServiceBinding.getEvaluator())
@@ -212,9 +212,9 @@ class AppContainerAndDiCoreTest {
 
         assertEquals(PinnedModelCatalog.GEMMA_4_E2B_SPEC, PinnedModelCatalog.recommendedSpecForRamTier(RamTier.TIER_0_LOW_MEMORY))
         assertEquals(PinnedModelCatalog.GEMMA_4_E2B_SPEC, PinnedModelCatalog.recommendedSpecForRamTier(RamTier.TIER_1_STANDARD))
-        assertEquals(PinnedModelCatalog.GEMMA_4_E4B_SPEC, PinnedModelCatalog.recommendedSpecForRamTier(RamTier.TIER_2_HIGH))
+        assertEquals(PinnedModelCatalog.GEMMA_4_E2B_SPEC, PinnedModelCatalog.recommendedSpecForRamTier(RamTier.TIER_2_HIGH))
 
-        assertEquals(1, PinnedModelCatalog.eligibleSpecsForRamTier(RamTier.TIER_1_STANDARD).size)
+        assertEquals(2, PinnedModelCatalog.eligibleSpecsForRamTier(RamTier.TIER_1_STANDARD).size)
         assertEquals(2, PinnedModelCatalog.eligibleSpecsForRamTier(RamTier.TIER_2_HIGH).size)
 
         assertTrue(
@@ -404,6 +404,74 @@ class AppContainerAndDiCoreTest {
             )
         )
         assertNull(malicious)
+    }
+
+    @Test
+    fun modelIntegrityHmacStampPersistsAcrossColdStartAndInvalidatesOnTamper() = runTest {
+        val sharedPrefs = InMemoryPreferencesStorageGateway()
+        val sharedKeyProvider = InMemoryTestKeyProvider()
+        val modelFile = File(tempModelsDir, PinnedModelCatalog.FILE_NAME_GEMMA4_E2B)
+        modelFile.writeBytes("placeholder-e2b-bytes".toByteArray(Charsets.UTF_8))
+
+        // First cold start with SHA verification disabled in test: verify stamp rejection when file has wrong SHA
+        val strictContainer = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            keyProvider = sharedKeyProvider,
+            preferencesStorageGateway = sharedPrefs,
+            verifyModelSha256OnResolve = true
+        )
+        assertNull(
+            "Invalid SHA-256 file must be rejected when no valid HMAC stamp exists",
+            strictContainer.resolveActiveModelPath()
+        )
+
+        // Forge a tampered HMAC stamp in preferences; must still fail full SHA-256 check
+        sharedPrefs.putString("model_integrity_hmac_${PinnedModelCatalog.MODEL_ID_GEMMA4_E2B}", "0".repeat(64))
+        assertNull(
+            "Tampered HMAC stamp must not bypass SHA-256 verification",
+            strictContainer.resolveActiveModelPath()
+        )
+        assertNull(
+            "Failed verification must clear invalid stored stamp",
+            sharedPrefs.getString("model_integrity_hmac_${PinnedModelCatalog.MODEL_ID_GEMMA4_E2B}", null)
+        )
+
+        // Simulate a valid Keystore HMAC stamp written by a prior verified import
+        val validStamp = strictContainer.hmacEngine.computeBlindIndex(
+            sharedKeyProvider.getOrCreateBlindIndexKey(),
+            "nava_model_integrity_v1",
+            PinnedModelCatalog.MODEL_ID_GEMMA4_E2B,
+            modelFile.canonicalPath,
+            modelFile.length().toString(),
+            modelFile.lastModified().toString(),
+            PinnedModelCatalog.SHA256_GEMMA4_E2B.lowercase()
+        )
+        sharedPrefs.putString("model_integrity_hmac_${PinnedModelCatalog.MODEL_ID_GEMMA4_E2B}", validStamp)
+
+        // Fresh AppContainer instance (cold start) sharing Keystore + prefs must resolve immediately via HMAC
+        val coldStartContainer = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            keyProvider = sharedKeyProvider,
+            preferencesStorageGateway = sharedPrefs,
+            verifyModelSha256OnResolve = true
+        )
+        assertEquals(modelFile.absolutePath, coldStartContainer.resolveActiveModelPath())
+
+        // Modifying the model file size invalidates the persisted HMAC stamp and forces full SHA-256 rejection
+        modelFile.appendBytes(byteArrayOf(0x01))
+        val afterModifyContainer = AppContainer.createForTesting(
+            vaultDir = tempVaultDir,
+            modelsDir = tempModelsDir,
+            keyProvider = sharedKeyProvider,
+            preferencesStorageGateway = sharedPrefs,
+            verifyModelSha256OnResolve = true
+        )
+        assertNull(
+            "Mutating file size must invalidate HMAC stamp and trigger SHA-256 rejection",
+            afterModifyContainer.resolveActiveModelPath()
+        )
     }
 
     private fun sha256Hex(bytes: ByteArray): String {

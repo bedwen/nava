@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+
+    <!-- Rounded squircle (112x112 centered at 144,144) inside Android 12 circular splash mask -->
+    <path
+        android:pathData="M116,88 L172,88 A28,28 0 0,1 200,116 L200,172 A28,28 0 0,1 172,200 L116,200 A28,28 0 0,1 88,172 L88,116 A28,28 0 0,1 116,88 Z"
+        android:strokeWidth="1.2"
+        android:strokeColor="#29FFFFFF">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="88"
+                android:startY="88"
+                android:endX="200"
+                android:endY="200"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF24384D" />
+                <item android:offset="0.52" android:color="#FF162332" />
+                <item android:offset="1.0" android:color="#FF0F1924" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Concentric outer neural ring (#FDFCF9 at 36% alpha) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M144,144 m-18,0 a18,18 0 1,0 36,0 a18,18 0 1,0 -36,0"
+        android:strokeWidth="3.1"
+        android:strokeColor="#5CFDFCF9" />
+
+    <!-- Solid center neural core dot (#FDFCF9) -->
+    <path
+        android:fillColor="#FDFCF9"
+        android:pathData="M144,144 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0" />
+
+</vector>

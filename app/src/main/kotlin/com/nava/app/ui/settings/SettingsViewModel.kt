@@ -6,12 +6,16 @@ import androidx.lifecycle.ViewModel
 import com.nava.app.di.AppContainer
 import com.nava.app.di.ModelQualitySuggestion
 import com.nava.app.di.PinnedModelCatalog
+import com.nava.app.di.PinnedModelRole
+import com.nava.app.reminders.ReminderNotificationPoster
 import com.nava.app.security.BiometricPromptLabels
 import com.nava.app.security.VaultUnlockResult
 import com.nava.domain.ai.PinnedModelSpec
 import com.nava.domain.ai.ProvisionedModelInfo
 import com.nava.domain.ai.RamTier
+import com.nava.domain.automation.BackgroundTaskOutcome
 import com.nava.domain.automation.BackgroundTaskRequest
+import com.nava.domain.automation.BackgroundTaskStatus
 import com.nava.domain.locale.LanguageEntry
 import com.nava.domain.security.AuditLogEntry
 import java.io.File
@@ -22,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,10 +74,16 @@ data class SettingsUiState(
     val showTier0LowMemoryNotice: Boolean = false,
     val qualitySuggestion: ModelQualitySuggestion? = null,
     val selectedModelId: String? = null,
+    val selectedFunctionModelId: String? = null,
+    val selectedEmbeddingModelId: String? = null,
+    val isFunctionRouterEnabled: Boolean = true,
+    val isSemanticEmbeddingEnabled: Boolean = true,
     val targetImportSpec: PinnedModelSpec = PinnedModelCatalog.GEMMA_4_E2B_SPEC,
     val provisionedModels: List<ProvisionedModelInfo> = emptyList(),
     val modelVerificationStatus: Map<String, Boolean> = emptyMap(),
     val enqueuedImportTaskId: String? = null,
+    val isImportingModel: Boolean = false,
+    val runtimeDiagnostic: String? = null,
     val isVaultUnlocked: Boolean = false,
     val lastVaultUnlockError: String? = null,
     val auditFilter: AuditLogFilter = AuditLogFilter.ALL,
@@ -80,6 +91,8 @@ data class SettingsUiState(
     val filteredAuditEntries: List<AuditLogEntry> = emptyList(),
     val isNotificationListenerEnabled: Boolean = false,
     val isNotificationPolicyAccessGranted: Boolean = false,
+    val isPostNotificationsGranted: Boolean = true,
+    val testNotificationStatus: Boolean? = null,
     val lastRequestedSystemTarget: SystemIntegrationTarget? = null,
     val errorMessage: String? = null
 )
@@ -124,20 +137,26 @@ class SettingsViewModel(
             container.thermalModelLifecycleManager.currentRamTier()
         }.getOrDefault(RamTier.TIER_1_STANDARD)
         val recommendedSpec = PinnedModelCatalog.recommendedSpecForRamTier(ramTier)
-        val selectedModelId = container.onboardingStateStore.getSelectedModelId()
+        val onboardingState = container.onboardingStateStore.currentState()
+        val isPostNotifGranted = runCatching {
+            container.intentGateway.canPostNotifications()
+        }.getOrDefault(true)
         return SettingsUiState(
             activeLocaleTag = container.appLocaleManager.currentLocaleTag(),
             ramTier = ramTier,
             showTier0LowMemoryNotice = ramTier == RamTier.TIER_0_LOW_MEMORY,
-            selectedModelId = selectedModelId,
-            targetImportSpec = PinnedModelCatalog.findByModelId(selectedModelId) ?: recommendedSpec,
+            selectedModelId = onboardingState.selectedModelId,
+            selectedFunctionModelId = onboardingState.selectedFunctionModelId,
+            selectedEmbeddingModelId = onboardingState.selectedEmbeddingModelId,
+            targetImportSpec = PinnedModelCatalog.findByModelId(onboardingState.selectedModelId) ?: recommendedSpec,
             isVaultUnlocked = container.vaultBiometricController.isVaultUnlockedFlow.value,
             isNotificationListenerEnabled = runCatching {
                 container.intentGateway.isNotificationListenerEnabled()
             }.getOrDefault(false),
             isNotificationPolicyAccessGranted = runCatching {
                 container.intentGateway.isNotificationPolicyAccessGranted()
-            }.getOrDefault(false)
+            }.getOrDefault(false),
+            isPostNotificationsGranted = isPostNotifGranted
         )
     }
 
@@ -161,7 +180,7 @@ class SettingsViewModel(
             val localeTag = container.appLocaleManager.currentLocaleTag()
             val ramTier = container.thermalModelLifecycleManager.currentRamTier()
             val provisioned = container.safModelProvisioner.listProvisionedModels()
-            val selectedModelId = container.onboardingStateStore.getSelectedModelId()
+            val onboardingState = container.onboardingStateStore.currentState()
             val vaultUnlocked = container.vaultBiometricController.refreshUnlockState()
             val auditEntries = container.auditLogDao.queryRecent(DEFAULT_AUDIT_LOG_LIMIT)
             val isNotifListenerEnabled = runCatching {
@@ -170,6 +189,9 @@ class SettingsViewModel(
             val isNotifPolicyGranted = runCatching {
                 container.intentGateway.isNotificationPolicyAccessGranted()
             }.getOrDefault(false)
+            val isPostNotifGranted = runCatching {
+                container.intentGateway.canPostNotifications()
+            }.getOrDefault(true)
 
             _uiState.update { state ->
                 state.copy(
@@ -178,19 +200,39 @@ class SettingsViewModel(
                     filteredLanguages = filterLanguages(languages, state.languageSearchQuery),
                     ramTier = ramTier,
                     showTier0LowMemoryNotice = ramTier == RamTier.TIER_0_LOW_MEMORY,
-                    selectedModelId = selectedModelId,
+                    selectedModelId = onboardingState.selectedModelId,
+                    selectedFunctionModelId = onboardingState.selectedFunctionModelId,
+                    selectedEmbeddingModelId = onboardingState.selectedEmbeddingModelId,
+                    isFunctionRouterEnabled = container.isFunctionRouterEnabled(),
+                    isSemanticEmbeddingEnabled = container.isSemanticEmbeddingEnabled(),
                     provisionedModels = provisioned,
+                    runtimeDiagnostic = container.liteRtLlmEngine.lastRuntimeDiagnostic(),
                     isVaultUnlocked = vaultUnlocked,
                     allAuditEntries = auditEntries,
                     filteredAuditEntries = filterAuditEntries(auditEntries, state.auditFilter),
                     isNotificationListenerEnabled = isNotifListenerEnabled,
-                    isNotificationPolicyAccessGranted = isNotifPolicyGranted
+                    isNotificationPolicyAccessGranted = isNotifPolicyGranted,
+                    isPostNotificationsGranted = isPostNotifGranted
                 )
             }
             refreshQualitySuggestion(localeTag)
         }
         activeRefreshJob = job
         return job
+    }
+
+    fun setFunctionRouterEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isFunctionRouterEnabled = enabled) }
+        vmScope.launch {
+            container.setFunctionRouterEnabled(enabled)
+        }
+    }
+
+    fun setSemanticEmbeddingEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isSemanticEmbeddingEnabled = enabled) }
+        vmScope.launch {
+            container.setSemanticEmbeddingEnabled(enabled)
+        }
     }
 
     private suspend fun refreshQualitySuggestion(localeTag: String) {
@@ -239,19 +281,42 @@ class SettingsViewModel(
 
     /**
      * Selects an already-provisioned `.litertlm` model by [modelId] as the active model in
-     * `OnboardingStateStore`.
+     * `OnboardingStateStore`, routed to the appropriate role slot.
      */
     fun selectActiveModel(modelId: String): Job {
         return vmScope.launch {
             try {
-                val updated = container.onboardingStateStore.setSelectedModelId(modelId)
-                _uiState.update {
-                    it.copy(
-                        selectedModelId = updated.selectedModelId,
-                        errorMessage = null
-                    )
+                val role = PinnedModelCatalog.roleForModelId(modelId)
+                when (role) {
+                    PinnedModelRole.PRIMARY_LLM -> {
+                        val updated = container.onboardingStateStore.setSelectedModelId(modelId)
+                        _uiState.update {
+                            it.copy(
+                                selectedModelId = updated.selectedModelId,
+                                errorMessage = null
+                            )
+                        }
+                        refreshQualitySuggestion(_uiState.value.activeLocaleTag)
+                    }
+                    PinnedModelRole.FUNCTION_ROUTER -> {
+                        val updated = container.onboardingStateStore.setSelectedFunctionModelId(modelId)
+                        _uiState.update {
+                            it.copy(
+                                selectedFunctionModelId = updated.selectedFunctionModelId,
+                                errorMessage = null
+                            )
+                        }
+                    }
+                    PinnedModelRole.SEMANTIC_EMBEDDING -> {
+                        val updated = container.onboardingStateStore.setSelectedEmbeddingModelId(modelId)
+                        _uiState.update {
+                            it.copy(
+                                selectedEmbeddingModelId = updated.selectedEmbeddingModelId,
+                                errorMessage = null
+                            )
+                        }
+                    }
                 }
-                refreshQualitySuggestion(_uiState.value.activeLocaleTag)
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.message ?: "Invalid model ID") }
             }
@@ -282,16 +347,46 @@ class SettingsViewModel(
             enqueuedAtEpochMs = now
         )
         vmScope.launch {
+            _uiState.update { it.copy(isImportingModel = true, errorMessage = null) }
             val enqueuedId = container.backgroundTaskContinuationManager.enqueue(request)
-            val updated = container.onboardingStateStore.setSelectedModelId(spec.modelId)
             _uiState.update { state ->
                 state.copy(
                     enqueuedImportTaskId = enqueuedId,
-                    selectedModelId = updated.selectedModelId,
                     errorMessage = null
                 )
             }
-            refreshQualitySuggestion(_uiState.value.activeLocaleTag)
+            // Observe WorkManager import status while Settings is open so the UI reflects
+            // completion or failure cleanly without blocking the UI thread.
+            var attempts = 0
+            while (attempts < 600) {
+                delay(500L)
+                attempts += 1
+                val status = container.backgroundTaskContinuationManager.getStatus(enqueuedId)
+                if (status == BackgroundTaskStatus.COMPLETED ||
+                    status == BackgroundTaskStatus.FAILED ||
+                    status == BackgroundTaskStatus.CANCELLED
+                ) {
+                    val outcome = container.backgroundTaskContinuationManager.getOutcome(enqueuedId)
+                    val failureMessage = if (outcome is BackgroundTaskOutcome.Failed) {
+                        val locale = container.appLocaleManager.currentLocale()
+                        container.messageRenderer.render(outcome.message, locale).second
+                    } else {
+                        null
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            isImportingModel = false,
+                            errorMessage = failureMessage
+                        )
+                    }
+                    refreshAll()
+                    break
+                }
+            }
+            if (_uiState.value.isImportingModel) {
+                _uiState.update { it.copy(isImportingModel = false) }
+                refreshAll()
+            }
         }
     }
 
@@ -329,19 +424,61 @@ class SettingsViewModel(
             if (deleted) {
                 val deletedModelId = PinnedModelCatalog.findByFileName(fileName)?.modelId
                     ?: fileName.removeSuffix(".litertlm")
-                if (_uiState.value.selectedModelId.equals(deletedModelId, ignoreCase = true)) {
-                    container.onboardingStateStore.setSelectedModelId(null)
+                val role = PinnedModelCatalog.roleForModelId(deletedModelId)
+                when (role) {
+                    PinnedModelRole.PRIMARY_LLM -> {
+                        if (_uiState.value.selectedModelId.equals(deletedModelId, ignoreCase = true)) {
+                            container.onboardingStateStore.setSelectedModelId(null)
+                        }
+                    }
+                    PinnedModelRole.FUNCTION_ROUTER -> {
+                        if (_uiState.value.selectedFunctionModelId.equals(deletedModelId, ignoreCase = true)) {
+                            container.onboardingStateStore.setSelectedFunctionModelId(null)
+                        }
+                    }
+                    PinnedModelRole.SEMANTIC_EMBEDDING -> {
+                        if (_uiState.value.selectedEmbeddingModelId.equals(deletedModelId, ignoreCase = true)) {
+                            container.onboardingStateStore.setSelectedEmbeddingModelId(null)
+                        }
+                    }
                 }
             }
             val provisioned = container.safModelProvisioner.listProvisionedModels()
-            val selectedModelId = container.onboardingStateStore.getSelectedModelId()
+            val onboardingState = container.onboardingStateStore.currentState()
             _uiState.update { state ->
                 val updatedMap = LinkedHashMap(state.modelVerificationStatus)
                 updatedMap.remove(fileName)
                 state.copy(
                     provisionedModels = provisioned,
-                    selectedModelId = selectedModelId,
+                    selectedModelId = onboardingState.selectedModelId,
+                    selectedFunctionModelId = onboardingState.selectedFunctionModelId,
+                    selectedEmbeddingModelId = onboardingState.selectedEmbeddingModelId,
+                    isFunctionRouterEnabled = container.isFunctionRouterEnabled(),
+                    isSemanticEmbeddingEnabled = container.isSemanticEmbeddingEnabled(),
                     modelVerificationStatus = updatedMap
+                )
+            }
+        }
+    }
+
+    /**
+     * Posts a localized test notification on the reminders channel to verify notification delivery.
+     */
+    fun sendTestNotification() {
+        vmScope.launch {
+            val ctx = container.appContext
+            val status = if (ctx != null) {
+                ReminderNotificationPoster.postTestNotification(ctx)
+            } else {
+                false
+            }
+            val isPostGranted = runCatching {
+                container.intentGateway.canPostNotifications()
+            }.getOrDefault(true)
+            _uiState.update {
+                it.copy(
+                    testNotificationStatus = status,
+                    isPostNotificationsGranted = isPostGranted
                 )
             }
         }
@@ -386,10 +523,14 @@ class SettingsViewModel(
                 }
 
                 VaultUnlockResult.Cancelled -> {
+                    val localizedCancel = container.messageRenderer.render(
+                        com.nava.domain.ui.UserMessage(com.nava.domain.ui.MessageKey.ACTION_BIOMETRIC_REQUIRED),
+                        container.appLocaleManager.currentLocale()
+                    ).second
                     _uiState.update {
                         it.copy(
                             isVaultUnlocked = false,
-                            lastVaultUnlockError = "Biometric authentication cancelled"
+                            lastVaultUnlockError = localizedCancel
                         )
                     }
                 }

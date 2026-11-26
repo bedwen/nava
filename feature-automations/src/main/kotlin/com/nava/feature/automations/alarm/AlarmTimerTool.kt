@@ -364,7 +364,7 @@ class SetTimerTool(
     override val metadata: ToolMetadata = ToolMetadata(
         name = AutomationToolNames.SET_TIMER,
         displayNameKey = "tool_set_timer",
-        description = "Sets a countdown timer for a specified duration in seconds.",
+        description = "Sets a Clock countdown timer for a specified duration (use schedule_reminder instead when the user asks for a reminder notification).",
         category = ToolCategory.TIME_CALENDAR,
         requiredCapability = AtomicCapability.CREATE_DRAFT,
         schemaVersion = 1,

@@ -268,7 +268,7 @@ class BlindSlotExtractor(
         private const val CLOSE_CHARS = "(?:>|\u3009|\u27E9|\u203A|\u232A|\u276F|\u02C3|\uFE65)"
         private const val PIPE_CHARS = "(?:\\||\u00A6|\u2223|\u2758|\u2502|\u2503|\u01C0)"
         private const val CONTROL_NAMES =
-            "(?:turn|start_of_turn|end_of_turn|tool_call|tool_response|channel|think|audio|eot|escape|image|video|file)"
+            "(?:turn|start_of_turn|end_of_turn|tool_call|tool_response|call|tool|channel|think|audio|eot|escape|image|video|file)"
 
         private val CONTROL_TOKEN_DETECT_REGEX: Regex = Regex(
             pattern = buildString {

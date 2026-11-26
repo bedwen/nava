@@ -1426,7 +1426,7 @@ class Phase5SecurityAndUiRedTeamTest {
             "fr" to File(resDir, "values-fr/strings.xml")
         )
 
-        assertEquals("Expected exactly 53 MessageKey enum entries", 53, MessageKey.entries.size)
+        assertEquals("Expected exactly 62 MessageKey enum entries", 62, MessageKey.entries.size)
 
         val sampleArgs = listOf(
             MessageArg.Text("07:30"),

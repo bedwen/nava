@@ -119,6 +119,78 @@
       },
       "staticSlots": {},
       "priority": 100
+    },
+    {
+      "patternId": "en_schedule_reminder_in_min_to",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:please )?remind me in (\\d{1,4}) (?:minutes?|mins?) to ([a-z0-9][a-z0-9 .,'_-]{0,80})$",
+      "slotMappings": {
+        "delay_minutes": "1",
+        "title": "2"
+      },
+      "staticSlots": {},
+      "priority": 120
+    },
+    {
+      "patternId": "en_schedule_reminder_to_in_min",
+      "toolName": "schedule_reminder",
+      "regexPattern": "^(?:please )?remind me to ([a-z0-9][a-z0-9 .,'_-]{0,80}) in (\\d{1,4}) (?:minutes?|mins?)$",
+      "slotMappings": {
+        "title": "1",
+        "delay_minutes": "2"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "en_summarize_notifications_limit",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:please )?(?:summarize|read|check|show|list) (?:my |the )?(?:last |recent |latest )?(\\d{1,2}) notifications?(?: on (?:my |the )?phone)?$",
+      "slotMappings": {
+        "limit": "1"
+      },
+      "staticSlots": {},
+      "priority": 115
+    },
+    {
+      "patternId": "en_summarize_notifications",
+      "toolName": "summarize_notifications",
+      "regexPattern": "^(?:please )?(?:summarize|read|check|show|list) (?:my |the )?(?:current |recent |unread |latest |all )?notifications?(?: on (?:my |the )?phone)?$",
+      "slotMappings": {},
+      "staticSlots": {},
+      "priority": 110
+    }
+  ],
+  "conversationalPatterns": [
+    {
+      "patternId": "en_greeting",
+      "regexPattern": "^(?:hello|hi|hey|good morning|good afternoon|good evening)(?: nava)?[.!?]?$",
+      "replyText": "Hello. I am Nava. How can I help you?",
+      "priority": 100
+    },
+    {
+      "patternId": "en_how_are_you",
+      "regexPattern": "^(?:how are you|how is it going|how are you doing)(?: nava)?[.!?]?$",
+      "replyText": "Doing well, thank you. Everything runs locally on your device. How can I help?",
+      "priority": 100
+    },
+    {
+      "patternId": "en_identity",
+      "regexPattern": "^(?:who are you|what is your name|what are you|tell me about yourself)[.!?]?$",
+      "replyText": "I am Nava, your calm, 100% offline on-device Android assistant.",
+      "priority": 100
+    },
+    {
+      "patternId": "en_capabilities",
+      "regexPattern": "^(?:what can you do|help|how can you help)[.!?]?$",
+      "replyText": "I can set alarms and timers, manage Focus mode, and assist with calendar events, notes, secure vault entries, and message drafts offline.",
+      "priority": 100
+    },
+    {
+      "patternId": "en_thanks",
+      "regexPattern": "^(?:thanks|thank you|thx)(?: nava)?[.!?]?$",
+      "replyText": "You are welcome. Let me know if you need anything else.",
+      "priority": 100
     }
   ]
 }

@@ -139,4 +139,35 @@ class MicroDslParserTest {
         assertEquals("Missed call: Mom at 14:00", reply.text)
         assertEquals("en", reply.languageTag)
     }
+
+    @Test
+    fun parsesFunctionGemmaCallSyntaxAndRejectsMalformedOrNestedFunctionCalls() {
+        val fgOutput = "<start_function_call>call:set_alarm{time:<escape>07:30<escape>,label:<escape>Gym \"AM\"<escape>}<end_function_call>"
+        val fgAst = parser.parse(
+            rawOutput = fgOutput,
+            planId = "plan-fg",
+            languageTag = "en",
+            toolMetadataByName = toolsByName
+        ) as MicroDslAst.Plan
+
+        assertEquals(1, fgAst.plan.calls.size)
+        val call = fgAst.plan.calls.single()
+        assertEquals("set_alarm", call.toolName)
+        assertEquals(SlotValueAst.StringValue("07:30"), call.arguments.getValue("time").value)
+        assertEquals(SlotValueAst.StringValue("Gym \"AM\""), call.arguments.getValue("label").value)
+
+        val badCases = listOf(
+            "<start_function_call>call:set_alarm{time:<escape>07:30<escape>}",
+            "<start_function_call>call:set_alarm{time:<escape>07:30}<end_function_call>",
+            "<start_function_call>call:set_alarm{label:<escape><start_function_call>call:wipe{}<escape>}<end_function_call>",
+            "<start_function_call>call:set_alarm{time:<escape>07:30<escape>}<tool_call|>",
+            (1..MicroDslParser.MAX_CALLS_PER_PLAN + 1).joinToString("") {
+                "<start_function_call>call:set_dnd{enabled:true}<end_function_call>"
+            }
+        )
+        for (bad in badCases) {
+            val res = parser.parse(bad, "plan-fg-bad", "en", toolsByName)
+            assertTrue("Expected ParseError for FunctionGemma malformed input: $bad", res is MicroDslAst.ParseError)
+        }
+    }
 }

@@ -23,10 +23,13 @@ import kotlinx.coroutines.sync.withLock
 data class DeviceHardwareSnapshot(
     val totalRamBytes: Long,
     val thermalStatusCode: Int,
-    val batteryLevelPercent: Int
+    val batteryLevelPercent: Int,
+    val availableRamBytes: Long = totalRamBytes / 2,
+    val isLowMemory: Boolean = false
 ) {
     init {
         require(totalRamBytes >= 0L) { "totalRamBytes must be non-negative, got $totalRamBytes" }
+        require(availableRamBytes >= 0L) { "availableRamBytes must be non-negative, got $availableRamBytes" }
     }
 }
 
@@ -59,7 +62,9 @@ class AndroidDeviceHardwareStatusProvider(
         return DeviceHardwareSnapshot(
             totalRamBytes = memoryInfo.totalMem.coerceAtLeast(0L),
             thermalStatusCode = normalizedThermal,
-            batteryLevelPercent = batteryLevel
+            batteryLevelPercent = batteryLevel,
+            availableRamBytes = memoryInfo.availMem.coerceAtLeast(0L),
+            isLowMemory = memoryInfo.lowMemory
         )
     }
 

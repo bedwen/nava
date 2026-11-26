@@ -2,6 +2,7 @@ package com.nava.domain.ai
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class Phase3DomainContractsTest {
@@ -169,6 +170,39 @@ class Phase3DomainContractsTest {
         assertThrows(IllegalArgumentException::class.java) {
             ProvisioningProgress(bytesCopied = 101L, totalBytes = 100L)
         }
+    }
+
+    @Test
+    fun ramTier_usesUniversalE2bDefaultAndOptimalContextTokens() {
+        assertEquals("gemma-4-E2B-it", RamTier.TIER_0_LOW_MEMORY.recommendedModelTag)
+        assertEquals("gemma-4-E2B-it", RamTier.TIER_1_STANDARD.recommendedModelTag)
+        assertEquals("gemma-4-E2B-it", RamTier.TIER_2_HIGH.recommendedModelTag)
+
+        assertEquals(1024, RamTier.TIER_0_LOW_MEMORY.defaultContextTokens)
+        assertEquals(4096, RamTier.TIER_1_STANDARD.defaultContextTokens)
+        assertEquals(4096, RamTier.TIER_2_HIGH.defaultContextTokens)
+
+        assertEquals(1024, RamTier.TIER_0_LOW_MEMORY.e2bOptimalContextTokens)
+        assertEquals(2048, RamTier.TIER_1_STANDARD.e2bOptimalContextTokens)
+        assertEquals(2048, RamTier.TIER_2_HIGH.e2bOptimalContextTokens)
+    }
+
+    @Test
+    fun resolutionTier_ordersFunctionGemmaBetweenCacheAndGemma3() {
+        assertTrue(ResolutionTier.TIER_1_RULE.ordinal < ResolutionTier.TIER_2_CACHE.ordinal)
+        assertTrue(ResolutionTier.TIER_2_CACHE.ordinal < ResolutionTier.TIER_2_5_FUNCTION_GEMMA.ordinal)
+        assertTrue(ResolutionTier.TIER_2_5_FUNCTION_GEMMA.ordinal < ResolutionTier.TIER_3_GEMMA.ordinal)
+    }
+
+    @Test
+    fun embeddingPort_cosineSimilarityHandlesValidAndDegenerateVectors() {
+        assertEquals(1f, EmbeddingPort.cosineSimilarity(floatArrayOf(1f, 2f, 3f), floatArrayOf(2f, 4f, 6f)), 1e-5f)
+        assertEquals(0f, EmbeddingPort.cosineSimilarity(floatArrayOf(1f, 0f), floatArrayOf(0f, 1f)), 1e-5f)
+        assertEquals(-1f, EmbeddingPort.cosineSimilarity(floatArrayOf(1f, -2f), floatArrayOf(-1f, 2f)), 1e-5f)
+        assertEquals(0f, EmbeddingPort.cosineSimilarity(floatArrayOf(1f, 2f), floatArrayOf(1f)), 1e-5f)
+        assertEquals(0f, EmbeddingPort.cosineSimilarity(floatArrayOf(), floatArrayOf()), 1e-5f)
+        assertEquals(0f, EmbeddingPort.cosineSimilarity(floatArrayOf(0f, 0f), floatArrayOf(1f, 1f)), 1e-5f)
+        assertEquals(0f, EmbeddingPort.cosineSimilarity(floatArrayOf(Float.NaN, 1f), floatArrayOf(1f, 1f)), 1e-5f)
     }
 
     private fun validCachedTemplate(

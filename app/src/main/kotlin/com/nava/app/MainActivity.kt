@@ -1,17 +1,29 @@
 package com.nava.app
 
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.nava.app.assistant.AssistantIntentContract
 import com.nava.app.assistant.AssistantOpenMode
 import com.nava.app.assistant.ConfirmationIntentExtras
 import com.nava.app.di.AppContainer
 import com.nava.app.di.NavaApplication
+import com.nava.app.reminders.ReminderNotificationPoster
 import com.nava.app.security.NotificationResolutionResult
 import com.nava.app.ui.navigation.NavaAppRoot
+import com.nava.app.ui.theme.NavaThemeMode
 import kotlinx.coroutines.launch
 
 /**
@@ -32,13 +44,39 @@ class MainActivity : AppCompatActivity() {
         get() = (application as NavaApplication).appContainer
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         handleIncomingIntentAsync(intent)
 
         setContent {
+            val systemDark = isSystemInDarkTheme()
+            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
+            val initialDark = when (themeMode) {
+                NavaThemeMode.DARK -> true
+                NavaThemeMode.LIGHT -> false
+                NavaThemeMode.SYSTEM -> systemDark
+            }
+            var effectiveDarkTheme by remember(initialDark) { mutableStateOf(initialDark) }
+
+            DisposableEffect(effectiveDarkTheme) {
+                val barStyle = if (effectiveDarkTheme) {
+                    SystemBarStyle.dark(Color.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                }
+                enableEdgeToEdge(
+                    statusBarStyle = barStyle,
+                    navigationBarStyle = barStyle
+                )
+                onDispose {}
+            }
+
             NavaAppRoot(
                 appContainer = appContainer,
-                activity = this
+                activity = this,
+                onDarkThemeChanged = { isDark ->
+                    effectiveDarkTheme = isDark
+                }
             )
         }
     }
@@ -51,6 +89,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIncomingIntentAsync(incomingIntent: Intent?) {
         if (incomingIntent == null) return
+        if (incomingIntent.getBooleanExtra(ReminderNotificationPoster.EXTRA_OPEN_BRIEFING_SUMMARY, false)) {
+            incomingIntent.removeExtra(ReminderNotificationPoster.EXTRA_OPEN_BRIEFING_SUMMARY)
+            appContainer.briefingSummaryRequested.value = true
+        }
         lifecycleScope.launch {
             resolveIncomingConfirmationIfPresent(
                 intent = incomingIntent,

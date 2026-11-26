@@ -11,7 +11,7 @@ package com.nava.core.security.storage
  */
 object EncryptedTableSchema {
     const val DATABASE_NAME: String = "nava_encrypted_store.db"
-    const val DATABASE_VERSION: Int = 1
+    const val DATABASE_VERSION: Int = 3
 
     const val TABLE_ACTION_CACHE: String = "action_cache"
     const val TABLE_AUTOMATION_RULES: String = "automation_rules"
@@ -19,6 +19,8 @@ object EncryptedTableSchema {
     const val TABLE_PERMISSION_TARGET_BINDINGS: String = "permission_target_bindings"
     const val TABLE_AUDIT_LOGS: String = "audit_logs"
     const val TABLE_ENCRYPTED_NOTES: String = "encrypted_notes"
+    const val TABLE_SCHEDULED_REMINDERS: String = "scheduled_reminders"
+    const val TABLE_NOTIFICATION_WATCHERS: String = "notification_watchers"
 
     /** Internal monotonic row-ID allocator table (not exposed to caller allowlist). */
     internal const val TABLE_ROW_SEQUENCES: String = "nava_row_sequences"
@@ -40,7 +42,9 @@ object EncryptedTableSchema {
         TABLE_PERMISSION_PROFILES,
         TABLE_PERMISSION_TARGET_BINDINGS,
         TABLE_AUDIT_LOGS,
-        TABLE_ENCRYPTED_NOTES
+        TABLE_ENCRYPTED_NOTES,
+        TABLE_SCHEDULED_REMINDERS,
+        TABLE_NOTIFICATION_WATCHERS
     )
 
     /** Throws [IllegalArgumentException] if [tableName] is not in [ALLOWED_TABLES]. */
@@ -49,6 +53,26 @@ object EncryptedTableSchema {
             "Unknown or disallowed encrypted table '$tableName'"
         }
         return tableName
+    }
+
+    /** Returns DDL statements creating a single allowlisted encrypted table and its indexes. */
+    fun createStatementsForTable(tableName: String): List<String> {
+        val validTable = validateTableName(tableName)
+        return listOf(
+            """
+            CREATE TABLE IF NOT EXISTS $validTable (
+                $COL_ROW_ID INTEGER PRIMARY KEY NOT NULL,
+                $COL_LOOKUP_HMAC TEXT NOT NULL,
+                $COL_SCHEMA_VERSION INTEGER NOT NULL,
+                $COL_CREATED_EPOCH_SEC INTEGER NOT NULL,
+                $COL_UPDATED_EPOCH_SEC INTEGER NOT NULL,
+                $COL_PAYLOAD_BLOB BLOB NOT NULL
+            )
+            """.trimIndent(),
+            "CREATE INDEX IF NOT EXISTS idx_${validTable}_lookup_hmac ON $validTable($COL_LOOKUP_HMAC)",
+            "CREATE INDEX IF NOT EXISTS idx_${validTable}_created_epoch ON $validTable($COL_CREATED_EPOCH_SEC)",
+            "CREATE INDEX IF NOT EXISTS idx_${validTable}_updated_epoch ON $validTable($COL_UPDATED_EPOCH_SEC)"
+        )
     }
 
     /** Returns all DDL statements creating the sequence table, encrypted tables, and indexes. */
@@ -63,27 +87,7 @@ object EncryptedTableSchema {
             """.trimIndent()
         )
         for (table in ALLOWED_TABLES.sorted()) {
-            statements.add(
-                """
-                CREATE TABLE IF NOT EXISTS $table (
-                    $COL_ROW_ID INTEGER PRIMARY KEY NOT NULL,
-                    $COL_LOOKUP_HMAC TEXT NOT NULL,
-                    $COL_SCHEMA_VERSION INTEGER NOT NULL,
-                    $COL_CREATED_EPOCH_SEC INTEGER NOT NULL,
-                    $COL_UPDATED_EPOCH_SEC INTEGER NOT NULL,
-                    $COL_PAYLOAD_BLOB BLOB NOT NULL
-                )
-                """.trimIndent()
-            )
-            statements.add(
-                "CREATE INDEX IF NOT EXISTS idx_${table}_lookup_hmac ON $table($COL_LOOKUP_HMAC)"
-            )
-            statements.add(
-                "CREATE INDEX IF NOT EXISTS idx_${table}_created_epoch ON $table($COL_CREATED_EPOCH_SEC)"
-            )
-            statements.add(
-                "CREATE INDEX IF NOT EXISTS idx_${table}_updated_epoch ON $table($COL_UPDATED_EPOCH_SEC)"
-            )
+            statements.addAll(createStatementsForTable(table))
         }
         return statements
     }
