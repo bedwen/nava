@@ -45,6 +45,7 @@ import com.nava.domain.ui.NeuralCanvasState
 import com.nava.domain.ui.NeuronNodeId
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /**
@@ -178,6 +179,14 @@ fun DualCoreNeuralCanvas(
             if (latestState.isIdle || (latestState.coreState == CoreActivityState.IDLE && buffers.pulseCompleted)) {
                 break
             }
+
+            // While Gemma 4 decodes (inner core glowing, no synapse pulse in flight) the canvas
+            // only shows an ambient glow. Running it at full display rate competes with the
+            // LiteRT-LM GPU backend for the GPU and adds heat, so cap it to ~30 FPS. Frame deltas
+            // come from frame timestamps, so animation speed is unchanged; pulses stay full rate.
+            if (latestState.coreState == CoreActivityState.INNER_CORE_ACTIVE && latestState.activePulse == null) {
+                delay(INFERENCE_AMBIENT_FRAME_INTERVAL_MS)
+            }
         }
     }
 
@@ -291,3 +300,6 @@ fun DualCoreNeuralCanvas(
 
 private val MIN_TOUCH_TARGET_DP = 48.dp
 private const val DEFAULT_FIRST_FRAME_DELTA_MS: Long = 16L
+
+/** ~30 FPS pacing for the ambient inner-core glow while the LLM is decoding. */
+private const val INFERENCE_AMBIENT_FRAME_INTERVAL_MS: Long = 33L

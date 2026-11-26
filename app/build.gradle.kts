@@ -25,6 +25,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            // Safe: no resource is resolved by name at runtime (no Resources.getIdentifier calls).
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

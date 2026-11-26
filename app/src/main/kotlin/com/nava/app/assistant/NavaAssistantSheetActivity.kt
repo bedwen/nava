@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +73,7 @@ import com.nava.app.ui.theme.NavaThemeMode
 import com.nava.app.voice.VoiceInputState
 import java.util.Locale
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Non-exported modal bottom-sheet [AppCompatActivity] launched by `NavaQuickSettingsTileService`,
@@ -105,11 +105,11 @@ class NavaAssistantSheetActivity : AppCompatActivity() {
         )[NavaHubViewModel::class.java]
 
         setContent {
-            val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsState()
+            val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsStateWithLifecycle()
             val activeLocale = remember(activeLocaleTag) {
                 Locale.forLanguageTag(activeLocaleTag)
             }
-            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
+            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsStateWithLifecycle()
             val darkOverride = when (themeMode) {
                 NavaThemeMode.DARK -> true
                 NavaThemeMode.LIGHT -> false
@@ -223,7 +223,7 @@ private fun NavaAssistantModalSheetContent(
     activity: FragmentActivity,
     onDismissSheet: () -> Unit
 ) {
-    val state by hubViewModel.uiState.collectAsState()
+    val state by hubViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val colors = NavaThemeExtras.colors
     val bidiFormatter = appContainer.bidiTextFormatter

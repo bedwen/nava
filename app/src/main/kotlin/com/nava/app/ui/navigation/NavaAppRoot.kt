@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +50,7 @@ import com.nava.app.ui.theme.NavaThemeExtras
 import com.nava.app.ui.theme.NavaThemeMode
 import com.nava.app.ui.vault.VaultScreen
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * State-driven root Compose host for `:app` (zero Navigation Compose dependency).
@@ -67,10 +67,10 @@ fun NavaAppRoot(
     modifier: Modifier = Modifier,
     onDarkThemeChanged: (Boolean) -> Unit = {}
 ) {
-    val onboardingState by appContainer.onboardingStateStore.stateFlow.collectAsState()
-    val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsState()
-    val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
-    val activeConfirmation by appContainer.pendingConfirmationStore.activeConfirmationFlow.collectAsState()
+    val onboardingState by appContainer.onboardingStateStore.stateFlow.collectAsStateWithLifecycle()
+    val activeLocaleTag by appContainer.appLocaleManager.activeLocaleTagFlow.collectAsStateWithLifecycle()
+    val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsStateWithLifecycle()
+    val activeConfirmation by appContainer.pendingConfirmationStore.activeConfirmationFlow.collectAsStateWithLifecycle()
 
     val activeLocale = remember(activeLocaleTag) {
         Locale.forLanguageTag(activeLocaleTag)

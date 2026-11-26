@@ -9,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +24,7 @@ import com.nava.app.security.NotificationResolutionResult
 import com.nava.app.ui.navigation.NavaAppRoot
 import com.nava.app.ui.theme.NavaThemeMode
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Primary [AppCompatActivity] entry point for Nava (PLAN.md Sections 2.3, 5.2, 6.2, and 6.4).
@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
 
         setContent {
             val systemDark = isSystemInDarkTheme()
-            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsState()
+            val themeMode by appContainer.themePreferenceStore.themeModeFlow.collectAsStateWithLifecycle()
             val initialDark = when (themeMode) {
                 NavaThemeMode.DARK -> true
                 NavaThemeMode.LIGHT -> false

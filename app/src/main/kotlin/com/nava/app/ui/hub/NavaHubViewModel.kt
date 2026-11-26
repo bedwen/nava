@@ -56,6 +56,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 
 /**
  * Snapshot of a radial app neuron inspected by tapping it on the Dual-Core Neural Canvas.
@@ -219,7 +221,9 @@ class NavaHubViewModel(
             }
         }
         vmScope.launch {
-            container.gemmaIntentResolver.streamingChatDeltas.collect { delta ->
+            // conflate + a short pause caps UI updates at ~20/s however fast tokens arrive; the
+            // final text is applied separately from the ConversationalReply resolution.
+            container.gemmaIntentResolver.streamingChatDeltas.conflate().collect { delta ->
                 _uiState.update { state ->
                     val updatedActionHistory = updateHistoryEntry(
                         history = state.actionHistory,
@@ -245,6 +249,7 @@ class NavaHubViewModel(
                         chatHistory = updatedChatHistory
                     )
                 }
+                delay(STREAM_UI_UPDATE_INTERVAL_MS)
             }
         }
         vmScope.launch {
@@ -903,12 +908,22 @@ class NavaHubViewModel(
 
         val accumulated = StringBuilder()
         var abortedReason: String? = null
+        var lastUiUpdateNanos = 0L
         try {
             container.liteRtLlmEngine.generateStream(request).collect { chunk ->
                 when (chunk) {
                     is LlmStreamChunk.OutputDelta -> {
                         if (chunk.text.isNotEmpty()) {
                             accumulated.append(chunk.text)
+                            // This collector runs while the engine holds its inference lock, so
+                            // per-token UI work slows decoding. Re-sanitize and publish at most
+                            // every STREAM_UI_UPDATE_INTERVAL_MS; the final reply is applied
+                            // after the stream completes.
+                            val nowNanos = System.nanoTime()
+                            if (nowNanos - lastUiUpdateNanos < STREAM_UI_UPDATE_INTERVAL_MS * 1_000_000L) {
+                                return@collect
+                            }
+                            lastUiUpdateNanos = nowNanos
                             val liveReply = com.nava.domain.security.Gemma4InputSanitizer
                                 .sanitize(accumulated.toString())
                             _uiState.update { state ->
@@ -1901,6 +1916,8 @@ class NavaHubViewModel(
     }
 
     companion object {
+        /** Minimum spacing between streamed-reply UI updates (~20 updates per second). */
+        private const val STREAM_UI_UPDATE_INTERVAL_MS: Long = 50L
         const val DEFAULT_NEURON_AUDIT_LIMIT: Int = 10
         private const val MAX_SESSION_HISTORY_TURNS: Int = 4
         private const val VOICE_NOTE_MIN_WORDS: Int = 15
