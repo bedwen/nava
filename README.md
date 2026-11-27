@@ -1,102 +1,145 @@
 # NAVA -- On-Device Gemma 4 Privacy, Security, and Automation Assistant
 
-> **Status: Work in Progress (Active Development)**
+> **Status: On hold (paused November 2026)**
 >
-> Nava is currently under active development and is **not yet production-ready**. All five architectural modules (Phases 1-5, including `:app`) are fully implemented and verified via Gate 1 architecture guards, comprehensive JVM unit and Gate 2 red-team test suites, `:app:assembleDebug`, and `:app:compileDebugAndroidTestKotlin`. Physical `arm64-v8a` device runtime execution (Phase 0 feasibility measurements and on-device `androidTest`) and an independent third-party security audit remain pending.
+> Development of Nava is **paused** until stronger small on-device language models are available.
+> The codebase builds, all unit and red-team suites pass, and the app runs on a physical phone,
+> but it is **not production-ready** and the latest changes have **not** been through the
+> independent security reviews described below. See [STATUS.md](STATUS.md) for the exact state,
+> known issues, and how to resume.
 
 ---
 
-## Overview
+## Why the project is paused
 
-**Nava** is a 100% offline Android personal assistant powered by on-device **Gemma 4** (`E2B` / `E4B` via LiteRT-LM) and a multi-tiered deterministic automation engine, designed under a strict **Zero-Trust** security architecture.
+Nava is a one-person project with a demanding goal: a genuinely useful assistant that runs
+100% offline, never asks for the `INTERNET` permission, and treats every external input as
+hostile. Two things make continuing right now hard:
 
-Its core goal is to provide fast, private on-device automation without cloud dependencies, without `android.permission.INTERNET`, and without third-party runtime libraries.
+1. **Today's small local models are the bottleneck.** On a mid-range phone (Samsung Galaxy A36,
+   8 GB RAM) Gemma 4 E2B needs about 12 s to load from cold and 4-5 s for an ordinary request.
+   More importantly, it is not reliable enough at structured tool calling: it uses typographic
+   quotes, invents argument formats, splits one request into several calls, and adds arguments
+   that do not exist. Much of the recent work was compensating for model output instead of
+   building features. Larger models (E4B and up) are too heavy for the target devices.
+2. **The security bar needs more than one person.** Every change that touches permissions,
+   taint tracking, or the firewall is supposed to pass an independent red-team review (Gate 2)
+   and an independent principal review (Gate 3). Doing that properly for every iteration is a
+   lot of work for a single maintainer.
+
+The plan is to resume when small on-device models handle function calling dependably. The
+architecture (deterministic Tier 1 rules, a cache, and the LLM only as a last resort) is designed
+so that a better model can be dropped in without changing the security model.
 
 ---
 
-## Current Implementation Status
+## What Nava is
 
-| Phase | Scope | Status |
-| :--- | :--- | :--- |
-| **Phase 0** | On-Device LiteRT-LM & Provisioning Feasibility Spike (`spikes/phase0-litertlm/`) | `SDK_AND_ARCHITECTURE_VERIFIED / ON_DEVICE_RUN_PENDING` |
-| **Phase 1** | 5-Module Gradle Skeleton, Gate 1 Guard (`scripts/verify_architecture.sh`), and `:domain` Pure Kotlin Contracts | `COMPLETED` |
-| **Phase 2** | `:core-security-data` (Keystore `AES-256-GCM`, `EncryptedSqliteStore`, `Nava Vault`, `PermissionProfile`, `RuleCapabilityGrant`, `AuditLogDao`, `BlindSlotExtractor`, `SecurityFirewall`, Gate 2 red-team suites) | `COMPLETED` |
-| **Phase 3** | `:core-ai` (3-Tier Hybrid Router, `LiteRtLlmEngine`, `DynamicToolPruner`, `MicroDslParser`, `ThermalModelLifecycleManager`, SAF SHA-256 model provisioning, `OnDeviceLanguageDetector`, `SupportedLanguageCatalog`, seed Layer R rule packs, Gate 2 red-team suites) | `COMPLETED` |
-| **Phase 4** | `:feature-automations` (Atomic `NavaTool` adapters, `NavaNotificationListenerService`, `WorkManager` `RoutineExecutor` & `BackgroundTaskContinuationManager`, Gate 2 real-firewall red-team suites) | `COMPLETED` |
-| **Phase 5** | `:app` (`Dual-Core Neural Canvas`, MVI screens & ViewModels, `NavaViewModelFactory`, Default-Deny Onboarding, Action Confirmation Cards, `VoiceInteractionService` / `TileService`, `AppContainer` manual DI, `values-{tr,ar,es,fr}` translations, Gates 1-3 verified) | `COMPLETED` |
+**Nava** is an offline Android personal assistant powered by on-device **Gemma 4**
+(`E2B` / `E4B` via LiteRT-LM), a **FunctionGemma 270M** router, and **EmbeddingGemma** for
+semantic search, built under a strict **Zero-Trust** architecture:
+
+* **No `INTERNET` permission, ever.** Models are imported through the Storage Access Framework
+  with streaming SHA-256 verification.
+* **No third-party runtime libraries.** Only the Android SDK, Kotlin stdlib/coroutines,
+  `androidx.*`, and Google's official LiteRT-LM runtime.
+* **Default-Deny.** Every app, notification source, folder, and feature starts blocked. Five
+  independent capability switches (`NOTIFICATION_READ`, `DATA_READ`, `CREATE_DRAFT`,
+  `MODIFY_DELETE_SEND`, `APP_LAUNCH`) are evaluated per target.
+* **Plan-Then-Extract with taint tracking.** Only the user's own words can authorize tool calls.
+  Text from notifications, messages, files, or shares is tagged `UNTRUSTED_EXTERNAL` and can
+  never trigger tools or auto-execute sensitive actions; this is enforced in Kotlin, not in the
+  prompt.
+* **3-tier hybrid router.** Tier 1 deterministic rule packs (< 2 ms), Tier 2 HMAC skeleton
+  cache, Tier 2.5 FunctionGemma, and Tier 3 Gemma 4 only when needed.
+* **Zero-jank Neural Canvas.** One hardware-accelerated canvas, no allocations while drawing,
+  0 FPS when idle.
 
 ---
 
-## Architecture & Core Principles
+## What works today
 
-Nava is structured into **5 Gradle modules** with dependencies pointing strictly inward toward `:domain`:
+Measured on a Samsung Galaxy A36 (Android 17) with Gemma 4 E2B on the GPU:
+
+| Area | State |
+| :--- | :--- |
+| Commands | Alarms, timers, reminders, calendar, notes, encrypted vault, SMS drafts, calls, Do Not Disturb, volume, app launch, folder access, notification summaries, daily briefing |
+| New in the last round | Personal memory ("remember that ..."), flashlight, media controls, Wi-Fi/Bluetooth/internet/volume panels, multi-step natural-language routines |
+| Languages | Tier 1 rule packs for Turkish, English, Spanish, French, Arabic; UI translated into all five |
+| Speed | Common commands resolve instantly in Tier 1; the model starts loading when the input field is focused, so most of the ~12 s cold load overlaps with typing; a warm Tier 3 request takes about 4 s |
+| Memory | About 870 MB while the model is resident; the model is unloaded after 180 s idle (back to about 115 MB) |
+| Permissions | Plain-language "permission needed" card with one-tap "always allow" / "ask every time", scoped to the single target |
+| My Day | Today's calendar, reminders, important notifications, and the list of remembered facts |
+| Tests | About 1,470 JVM unit and red-team tests; `./gradlew verifyArchitecture test` passes |
+
+---
+
+## Review status of the latest work
+
+Nava's process has three gates: **Gate 1** (automated architecture guard), **Gate 2**
+(independent red-team suites), and **Gate 3** (independent principal review). Not all recent
+work has been through all three:
+
+| Change set | Gate 1 | Gate 2 | Gate 3 |
+| :--- | :--- | :--- | :--- |
+| Phases 1-5 (original implementation) | Passed | Passed | Passed |
+| Audit fixes: Stage 1 history taint, per-slot model residency, locked-device key handling, routine anti-rollback seals | Passed | Passed (3 red-team tests still `@Ignore`d) | Passed, but the final remediation round was not re-checked |
+| UI performance (lifecycle-aware state, streaming throttle, lazy audit log) | Passed | Not run | **Not run** |
+| Notification watcher hardening (sender matching, locked-screen snapshot) | Passed | Not run | **Not run** |
+| Speed, one-tap permissions, My Day, personal memory, device controls, routines, token call limit, outbound settings panels | Passed | **Not run** | **Not run** |
+
+**Before anyone relies on this code, the last three rows need Gate 2 and Gate 3**, in
+particular: the one-tap permission grant, the personal memory feed into the planner, the
+`SETTINGS_PANEL` outbound action, and the change that lets a capability token cover repeated
+calls to the same tool.
+
+---
+
+## Architecture
+
+Five Gradle modules with dependencies pointing inward to `:domain`:
 
 ```
-:app                    Presentation (Jetpack Compose, Dual-Core Neural Canvas, MVI, AppContainer DI)
-  |-- :feature-automations   Atomic NavaTool adapters (Alarm, Calendar, SMS Draft, Audio/DND, SAF, Routines)
-  |-- :core-ai               3-Tier Hybrid Router & on-device Gemma 4 (LiteRT-LM) engine
-  |-- :core-security-data    Keystore AES-256-GCM, EncryptedSqliteStore, Nava Vault, SecurityFirewall
-  '-- :domain                Pure Kotlin contracts, use cases, and entities (zero Android/AndroidX imports)
+:app                    Jetpack Compose UI, Neural Canvas, MVI ViewModels, AppContainer DI
+  |-- :feature-automations   NavaTool adapters (alarm, calendar, SMS, audio, SAF, memory, routines)
+  |-- :core-ai               3-tier router, LiteRT-LM engine, prompt format, parsers, lifecycle
+  |-- :core-security-data    Keystore AES-256-GCM, EncryptedSqliteStore, vault, firewall
+  '-- :domain                Pure Kotlin contracts and use cases (no Android imports)
 ```
 
-### Key Design Highlights
-
-* **Zero `INTERNET` Permission:** `android.permission.INTERNET` is forbidden in all `AndroidManifest.xml` files. Model weights (`.litertlm`) are provisioned offline via Storage Access Framework (SAF) with streaming SHA-256 verification.
-* **Zero External 3rd-Party Dependencies:** Built exclusively with the Official Android SDK, Kotlin Standard Library / Coroutines, Official Android Jetpack (`androidx.*`), and Google's official on-device `com.google.ai.edge.litertlm:litertlm-android` runtime.
-* **3-Tier Hybrid Intent Router:**
-  * **Tier 1 (`RuleIntentResolver`):** Deterministic rule engine (`<2 ms`) handling common commands without waking the LLM.
-  * **Tier 2 (`CacheIntentResolver`):** `HMAC-SHA256` normalized skeleton cache (`<5 ms`).
-  * **Tier 3 (`GemmaIntentResolver`):** On-device Gemma 4 inference via `LiteRtLlmEngine` for complex or chained requests.
-* **Default-Deny & 5 Atomic Capability Switches:** Every app, notification source, and directory starts blocked (`DENIED`). Capabilities (`NOTIFICATION_READ`, `DATA_READ`, `CREATE_DRAFT`, `MODIFY_DELETE_SEND`, `APP_LAUNCH`) are evaluated independently via `PermissionProfile`.
-* **Plan-Then-Extract & Value Taint Tracking:** Untrusted external data (notifications, messages, files, clipboard) is isolated with `DataProvenance.UNTRUSTED_EXTERNAL` (`Tainted<T>`). Stage 1 mints a `CapabilityToken` strictly from user utterances; Stage 2 (`BlindSlotExtractor`) deterministically rejects any tool call in Kotlin (`SecurityException`), and sensitive slots from untrusted sources cannot auto-execute.
-* **Zero-Jank Neural UI:** A single hardware-accelerated `Canvas` backed by pre-allocated primitive `FloatArray` buffers (`0` heap allocations inside `onDraw`, sleeping at `0 FPS` when idle).
+* **Language / build:** Kotlin `2.4.21`, coroutines `1.9.0`, AGP `8.7.3`
+* **Platform:** Android, `minSdk = 31`, `arm64-v8a`
+* **UI:** Jetpack Compose, Material 3
+* **On-device AI:** LiteRT-LM `0.19.1`
+* **DI:** plain constructor injection in `AppContainer`
 
 ---
 
-## Tech Stack & Baseline
+## Building and testing
 
-* **Language:** Kotlin (`2.4.21`) + Coroutines (`1.9.0`)
-* **Build System:** Gradle (AGP `8.7.3`)
-* **Target Platform:** Android (`minSdk = 31`, `arm64-v8a`)
-* **UI:** Jetpack Compose (`composeBom = 2024.12.01`, Material 3)
-* **On-Device AI:** LiteRT-LM (`com.google.ai.edge.litertlm:litertlm-android:0.19.1`)
-* **Dependency Injection:** Pure Kotlin Constructor DI (`AppContainer`)
-
----
-
-## Verification
-
-Nava uses a **Risk-Tiered Verification Pipeline**:
-
-1. **Gate 1 (Deterministic Architecture Guard):** Checks manifest permissions, dependency allowlist, `:domain` purity, Neural Canvas zero-allocation rules, and English/ASCII codebase rules:
-   ```bash
-   ./gradlew verifyArchitecture
-   # or directly:
-   bash scripts/verify_architecture.sh
-   ```
-2. **Gate 2 (Adversarial Red-Team & Invariant Suites):** Security, allocation, and invariant test suites covering prompt injection, `Tainted<T>` escalation, IPC exfiltration, cryptographic `AAD` integrity, multilingual normalization, and Neural Canvas zero-allocation constraints.
-3. **Gate 3 (Independent Four-Eyes Review):** Line-by-line architecture, security, lifecycle, and concurrency review against `PLAN.md`.
-
-All five modules (Phases 1-5) are implemented and verified:
 ```bash
-./gradlew test
-./gradlew :app:assembleDebug :app:compileDebugAndroidTestKotlin
+./gradlew verifyArchitecture test      # Gate 1 + all JVM unit and red-team suites
+./gradlew :app:assembleDebug           # debug APK
 ```
 
-> **Note:** Physical `arm64-v8a` device runtime execution (Phase 0 LiteRT-LM hardware measurements and on-device `androidTest` suites) and an independent third-party security audit remain pending.
+Models are not shipped with the repository. Import a Gemma 4 `.litertlm` file from the app's
+onboarding screen (Storage Access Framework, SHA-256 verified).
 
 ---
 
-## Disclaimer & Untested Software Notice
+## Disclaimer
 
-**IMPORTANT -- PLEASE READ CAREFULLY:**
-
-* **Development Status:** While all architectural modules (Phases 1-5, including `:app`) are implemented and verified via Gate 1 architecture guards, JVM unit and Gate 2 red-team suites, `:app:assembleDebug`, and `:app:compileDebugAndroidTestKotlin`, Nava remains under active development and is **not yet production-ready**.
-* **Pending Physical Device Runtime Execution & Audit:** The application has **not yet been executed or benchmarked end-to-end on physical `arm64-v8a` Android hardware** (Phase 0 on-device spike measurements and on-device `androidTest` suites remain pending hardware testbed execution), and no independent third-party security audit has been conducted.
-* **No Warranty / Use at Your Own Risk:** This software is provided **"AS IS"**, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, security, or non-infringement. Do **not** rely on this repository in production or for safeguarding critical or sensitive personal data while it remains under active development. In no event shall the authors or copyright holders be liable for any claim, damages, data loss, or other liability arising from the use of this software.
+* **Paused and not production-ready.** The app has been run on one physical device only, no
+  independent third-party security audit has been performed, and the latest changes have not
+  passed Gate 2 or Gate 3.
+* **No warranty.** This software is provided **"AS IS"**, without warranty of any kind, express or
+  implied, including merchantability, fitness for a particular purpose, security, or
+  non-infringement. Do not use it to protect critical or sensitive personal data. In no event
+  shall the authors or copyright holders be liable for any claim, damages, data loss, or other
+  liability arising from its use.
 
 ---
 
 ## License
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for the full license text.
+Licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE).
