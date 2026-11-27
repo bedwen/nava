@@ -1,4 +1,4 @@
-# NAVA -- On-Device Gemma 4 Privacy, Security, and Automation Assistant
+# NAVA: On-Device Gemma 4 Privacy, Security, and Automation Assistant
 
 <h2 align="center">PROJECT ON HOLD -- PAUSED NOVEMBER 2026</h2>
 
