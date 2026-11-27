@@ -159,7 +159,8 @@ class FunctionGemmaIntentResolver(
             requestId = request.requestId,
             utteranceProvenance = request.provenance,
             candidateTools = candidateTools,
-            nowEpochMs = request.issuedAtEpochMs
+            nowEpochMs = request.issuedAtEpochMs,
+            maxToolCalls = boundCalls.size
         )
 
         return ResolutionResult.ResolvedPlan(

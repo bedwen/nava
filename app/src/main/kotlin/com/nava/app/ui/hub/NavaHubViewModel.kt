@@ -1527,7 +1527,8 @@ class NavaHubViewModel(
                 requestId = item.requestId,
                 utteranceProvenance = DataProvenance.USER_UTTERANCE,
                 candidateTools = candidateTools,
-                nowEpochMs = nowEpochMs
+                nowEpochMs = nowEpochMs,
+                maxToolCalls = calls.size
             )
         } catch (e: SecurityException) {
             applyUserMessageBanner(

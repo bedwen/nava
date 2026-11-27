@@ -98,7 +98,8 @@ class CacheIntentResolver(
             requestId = request.requestId,
             utteranceProvenance = request.provenance,
             candidateTools = candidateTools,
-            nowEpochMs = request.issuedAtEpochMs
+            nowEpochMs = request.issuedAtEpochMs,
+            maxToolCalls = replayedCalls.size
         )
 
         val plan = PlanAst(

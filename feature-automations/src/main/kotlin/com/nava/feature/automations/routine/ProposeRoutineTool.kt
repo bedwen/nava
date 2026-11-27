@@ -189,15 +189,22 @@ class ProposeRoutineTool(
 
         val nowMs = clock()
         val triggerSpec = RuleTriggerSpec(triggerType = triggerType, parameters = triggerParams)
-        // Small models often split one multi-step request into several calls with the same
-        // routine name. Merge them into the draft this tool created moments ago, as long as it is
-        // still pending approval and has the same trigger; never touch approved routines.
-        val recent = recentDrafts[ruleId]
-        val existing = ruleGrantPort.findRule(ruleId)
-        if (recent != null && nowMs - recent.first in 0..MERGE_WINDOW_MS && recent.second == triggerSpec &&
+        // Small models often split one multi-step request into several calls, sometimes with
+        // extended routine names. Calls from the same user request with the same trigger are
+        // merged into the draft that request created moments ago, as long as it is still pending
+        // approval; approved routines are never touched.
+        var targetRuleId = ruleId
+        val recent = recentDrafts[context.requestId]
+        val existing = recent?.let { ruleGrantPort.findRule(it.ruleId) }
+        // Names must continue each other ("evening" / "evening_volume"); two unrelated routines
+        // proposed in one request ("morning" and "evening") stay separate.
+        val namesRelated = recent != null &&
+            (ruleId.startsWith(recent.ruleId) || recent.ruleId.startsWith(ruleId))
+        if (recent != null && namesRelated && nowMs - recent.createdAtMs in 0..MERGE_WINDOW_MS && recent.trigger == triggerSpec &&
             existing != null && existing.approvalState == RuleApprovalState.PENDING_USER_APPROVAL &&
             existing.triggerSpec == triggerSpec
         ) {
+            targetRuleId = existing.ruleId
             val merged = (existing.staticActions + actionSpecs).distinctBy { it.toolName }
             if (merged.size > MAX_ROUTINE_ACTIONS) {
                 return ToolArgumentReader.invalidArgumentsFailure(
@@ -207,9 +214,10 @@ class ProposeRoutineTool(
             actionSpecs.clear()
             actionSpecs.addAll(merged)
         }
-        recentDrafts[ruleId] = nowMs to triggerSpec
+        recentDrafts.entries.removeIf { nowMs - it.value.createdAtMs > MERGE_WINDOW_MS }
+        recentDrafts[context.requestId] = RecentDraft(targetRuleId, nowMs, triggerSpec)
         val pendingGrant = ruleGrantPort.createPendingRule(
-            ruleId = ruleId,
+            ruleId = targetRuleId,
             triggerSpec = triggerSpec,
             staticActions = actionSpecs,
             nowEpochSec = nowMs / 1000L
@@ -241,12 +249,20 @@ class ProposeRoutineTool(
         )
     }
 
-    private val recentDrafts = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, RuleTriggerSpec>>()
+    private data class RecentDraft(val ruleId: String, val createdAtMs: Long, val trigger: RuleTriggerSpec)
+
+    /** Drafts keyed by the request that created them (bounded: entries older than the window are dropped). */
+    private val recentDrafts = java.util.concurrent.ConcurrentHashMap<String, RecentDraft>()
 
     private fun normalizeRuleId(name: String): String {
-        val sb = StringBuilder(name.length)
+        // Fold diacritics so "Aksam" with a cedilla keeps its letters instead of becoming "ak_am".
+        val folded = java.text.Normalizer.normalize(
+            name.replace('\u0131', 'i').replace('\u0130', 'I'),
+            java.text.Normalizer.Form.NFD
+        ).replace(COMBINING_MARKS, "")
+        val sb = StringBuilder(folded.length)
         var lastWasDash = false
-        for (ch in name.lowercase(Locale.US)) {
+        for (ch in folded.lowercase(Locale.US)) {
             if (ch in 'a'..'z' || ch in '0'..'9') {
                 sb.append(ch)
                 lastWasDash = false
@@ -294,6 +310,7 @@ class ProposeRoutineTool(
     companion object {
         const val MAX_ROUTINE_ACTIONS: Int = 3
         private const val MERGE_WINDOW_MS: Long = 60_000L
+        private val COMBINING_MARKS = Regex("\\p{Mn}+")
 
         /** Tools that must never run from a routine (no self-replicating or memory-writing routines). */
         val NON_ROUTINE_ACTIONS: Set<String> = setOf(

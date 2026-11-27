@@ -262,8 +262,8 @@ class PhaseARemindersAndBriefingTest {
         assertFalse(created.canExecuteUnattended())
     }
 
-    private fun routineArgs(actionTool: String, actionArgs: String? = null) = buildMap {
-        put("rule_name", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("Evening"), SensitiveSlotKind.EVENT_TITLE))
+    private fun routineArgs(actionTool: String, actionArgs: String? = null, name: String = "Evening") = buildMap {
+        put("rule_name", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue(name), SensitiveSlotKind.EVENT_TITLE))
         put("trigger_type", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("TIME_OF_DAY"), SensitiveSlotKind.TEXT_BODY))
         put("trigger_time", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("22:00"), SensitiveSlotKind.DATE_TIME))
         put("action_tool", Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue(actionTool), SensitiveSlotKind.INTENT_ACTION))
@@ -315,7 +315,9 @@ class PhaseARemindersAndBriefingTest {
 
         assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "title=Water;delay_minutes=5")) is ToolResult.Success)
         now += 1_000L
-        assertTrue(proposeTool.execute(ctx, routineArgs("cancel_reminder", "reminder_id=r1")) is ToolResult.Success)
+        // Same request, different name (as the on-device model does): still one routine.
+        assertTrue(proposeTool.execute(ctx, routineArgs("cancel_reminder", "reminder_id=r1", name = "Evening volume")) is ToolResult.Success)
+        assertEquals(null, rulePort.findRule("evening_volume"))
         assertEquals(
             listOf("schedule_reminder", "cancel_reminder"),
             rulePort.findRule("evening")!!.staticActions.map { it.toolName }
@@ -325,6 +327,11 @@ class PhaseARemindersAndBriefingTest {
         now += 120_000L
         assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "title=Tea;delay_minutes=5")) is ToolResult.Success)
         assertEquals(listOf("schedule_reminder"), rulePort.findRule("evening")!!.staticActions.map { it.toolName })
+
+        // Turkish letters are folded instead of dropped from the routine id.
+        now += 120_000L
+        proposeTool.execute(ctx, routineArgs("schedule_reminder", "title=Tea;delay_minutes=5", name = "Ak\u015fam Rahatl\u0131k"))
+        assertNotNull(rulePort.findRule("aksam_rahatlik"))
     }
 
     @Test
