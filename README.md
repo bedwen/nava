@@ -1,12 +1,26 @@
 # NAVA -- On-Device Gemma 4 Privacy, Security, and Automation Assistant
 
-> **Status: On hold (paused November 2026)**
->
-> Development of Nava is **paused** until stronger small on-device language models are available.
-> The codebase builds, all unit and red-team suites pass, and the app runs on a physical phone,
-> but it is **not production-ready** and the latest changes have **not** been through the
-> independent security reviews described below. See [STATUS.md](STATUS.md) for the exact state,
-> known issues, and how to resume.
+<h2 align="center">PROJECT ON HOLD -- PAUSED NOVEMBER 2026</h2>
+
+<p align="center">
+  <b>Development is paused until stronger small on-device language models are available.</b><br>
+  This is a one-person project; it is <b>not production-ready</b> and is <b>not</b> under active maintenance.
+</p>
+
+> [!CAUTION]
+> **Do not rely on this code to protect real personal data.**
+> The latest changes (one-tap permissions, personal memory, device controls, routines, UI
+> performance, notification watchers) have **not** passed the independent Gate 2 red-team review
+> or the Gate 3 principal review. See [Review status](#review-status-of-the-latest-work).
+
+| | |
+| :--- | :--- |
+| **State** | Paused, not maintained |
+| **Builds / tests** | Yes -- `./gradlew verifyArchitecture test` passes (about 1,470 JVM tests) |
+| **Runs on a phone** | Yes -- tested on one device (Samsung Galaxy A36, Android 17) |
+| **Security review of latest work** | **Not done** (Gate 2 and Gate 3 pending) |
+| **Why paused** | Small local models are not yet reliable at tool calling; the review bar is too heavy for one maintainer |
+| **Resume plan** | [STATUS.md](STATUS.md) -- exact state, known issues, and next steps |
 
 ---
 
