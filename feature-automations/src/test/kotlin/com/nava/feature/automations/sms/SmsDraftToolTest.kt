@@ -62,7 +62,8 @@ class SmsDraftToolTest {
             requestId: String,
             utteranceProvenance: DataProvenance,
             candidateTools: Set<String>,
-            nowEpochMs: Long
+            nowEpochMs: Long,
+            maxToolCalls: Int
         ): CapabilityToken = error("not needed")
 
         override suspend fun authorizeToolCall(

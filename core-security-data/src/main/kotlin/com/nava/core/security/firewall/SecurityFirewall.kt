@@ -50,7 +50,8 @@ class SecurityFirewall(
         requestId: String,
         utteranceProvenance: DataProvenance,
         candidateTools: Set<String>,
-        nowEpochMs: Long
+        nowEpochMs: Long,
+        maxToolCalls: Int
     ): CapabilityToken {
         require(requestId.isNotBlank()) { "requestId must not be blank" }
         if (utteranceProvenance != DataProvenance.USER_UTTERANCE) {
@@ -71,7 +72,12 @@ class SecurityFirewall(
             requestId = requestId,
             allowedTools = candidateTools,
             mintProvenance = utteranceProvenance,
-            issuedAtEpochMs = nowEpochMs
+            issuedAtEpochMs = nowEpochMs,
+            // A plan may call the same tool more than once; bound by the planner's call count but
+            // never below the distinct tool count and never above a fixed ceiling.
+            maxToolCalls = maxToolCalls
+                .coerceAtMost(maxOf(MAX_PLAN_CALLS, candidateTools.size))
+                .coerceAtLeast(candidateTools.size.coerceAtLeast(1))
         )
     }
 
@@ -672,6 +678,8 @@ class SecurityFirewall(
     }
 
     companion object {
+        const val MAX_PLAN_CALLS: Int = 8
+
         const val DECISION_AUTHORIZED: String = "AUTHORIZED"
         const val DECISION_REQUIRES_CONFIRMATION: String = "REQUIRES_CONFIRMATION"
         const val DECISION_REQUIRES_CONFIRMATION_TAINTED: String = "REQUIRES_CONFIRMATION_TAINTED"

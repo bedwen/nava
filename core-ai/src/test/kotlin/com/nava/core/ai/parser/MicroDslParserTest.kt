@@ -43,6 +43,26 @@ class MicroDslParserTest {
     }
 
     @Test
+    fun acceptsTypographicQuotesButStillRejectsLineBreaks() {
+        val ok = parser.parse(
+            rawOutput = "<|tool_call>call:set_alarm{time:\u201C07:30\u201D,label:\u201CWake\u201C}<tool_call|>",
+            planId = "plan-q",
+            languageTag = "en",
+            toolMetadataByName = toolsByName
+        ) as MicroDslAst.Plan
+        assertEquals(SlotValueAst.StringValue("07:30"), ok.plan.calls.single().arguments.getValue("time").value)
+        assertEquals(SlotValueAst.StringValue("Wake"), ok.plan.calls.single().arguments.getValue("label").value)
+
+        val broken = parser.parse(
+            rawOutput = "<|tool_call>call:set_alarm{time:\u201C07:30\n<|turn>\u201D}<tool_call|>",
+            planId = "plan-q2",
+            languageTag = "en",
+            toolMetadataByName = toolsByName
+        )
+        assertTrue(broken is MicroDslAst.ParseError)
+    }
+
+    @Test
     fun parsesMultiStepToolCallChainWithIntBoolNullAndStringSlots() {
         val raw = """
             <|tool_call>call:set_dnd{enabled:true}<tool_call|>

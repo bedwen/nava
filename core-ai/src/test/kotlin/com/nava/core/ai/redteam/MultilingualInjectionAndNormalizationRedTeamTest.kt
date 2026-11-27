@@ -670,7 +670,8 @@ class MultilingualInjectionAndNormalizationRedTeamTest {
             requestId: String,
             utteranceProvenance: DataProvenance,
             candidateTools: Set<String>,
-            nowEpochMs: Long
+            nowEpochMs: Long,
+            maxToolCalls: Int
         ): CapabilityToken {
             val token = CapabilityToken.mint(
                 tokenId = "ml-tok-${counter.incrementAndGet()}",

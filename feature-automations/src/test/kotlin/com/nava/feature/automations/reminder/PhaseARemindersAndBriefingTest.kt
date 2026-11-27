@@ -296,7 +296,52 @@ class PhaseARemindersAndBriefingTest {
         assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,schedule_reminder,schedule_reminder,schedule_reminder")) is ToolResult.Failure)
         assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,propose_routine")) is ToolResult.Failure)
         assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,wipe_device")) is ToolResult.Failure)
-        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "a=1|b=2")) is ToolResult.Failure)
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder,schedule_reminder", "a=1|b=2|c=3")) is ToolResult.Failure)
+    }
+
+    @Test
+    fun proposeRoutineMergesSplitCallsIntoOnePendingDraft() = runBlocking {
+        val rulePort = FakeRuleGrantPort()
+        val audit = FakeAuditLog()
+        val registry = ToolRegistry(
+            listOf(
+                ScheduleReminderTool(FakeReminderPort(), FakeSchedulerPort(), audit),
+                CancelReminderTool(FakeReminderPort(), FakeSchedulerPort(), audit)
+            )
+        )
+        var now = 1_700_000_000_000L
+        val proposeTool = ProposeRoutineTool(rulePort, { registry }, audit, clock = { now })
+        val ctx = userContext(AutomationToolNames.PROPOSE_ROUTINE)
+
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "title=Water;delay_minutes=5")) is ToolResult.Success)
+        now += 1_000L
+        assertTrue(proposeTool.execute(ctx, routineArgs("cancel_reminder", "reminder_id=r1")) is ToolResult.Success)
+        assertEquals(
+            listOf("schedule_reminder", "cancel_reminder"),
+            rulePort.findRule("evening")!!.staticActions.map { it.toolName }
+        )
+
+        // Outside the merge window the routine is replaced, not extended.
+        now += 120_000L
+        assertTrue(proposeTool.execute(ctx, routineArgs("schedule_reminder", "title=Tea;delay_minutes=5")) is ToolResult.Success)
+        assertEquals(listOf("schedule_reminder"), rulePort.findRule("evening")!!.staticActions.map { it.toolName })
+    }
+
+    @Test
+    fun proposeRoutineNormalizesSmallModelSpellings() = runBlocking {
+        val rulePort = FakeRuleGrantPort()
+        val audit = FakeAuditLog()
+        val registry = ToolRegistry(listOf(ScheduleReminderTool(FakeReminderPort(), FakeSchedulerPort(), audit)))
+        val proposeTool = ProposeRoutineTool(rulePort, { registry }, audit, clock = { 1_700_000_000_000L })
+        val args = routineArgs("schedule_reminder", "{\"title\":\"Water\", \"delay_minutes\":5, \"note\":null}").toMutableMap()
+        args["trigger_type"] = Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("time"), SensitiveSlotKind.TEXT_BODY)
+        args["trigger_time"] = Tainted.fromUserUtterance<SlotValueAst>(SlotValueAst.StringValue("22"), SensitiveSlotKind.DATE_TIME)
+
+        assertTrue(proposeTool.execute(userContext(AutomationToolNames.PROPOSE_ROUTINE), args) is ToolResult.Success)
+        val rule = rulePort.findRule("evening")!!
+        assertEquals("TIME_OF_DAY", rule.triggerSpec.triggerType)
+        assertEquals("22:00", rule.triggerSpec.parameters["time"])
+        assertEquals(mapOf("title" to "Water", "delay_minutes" to "5"), rule.staticActions.single().staticArguments)
     }
 
     @Test

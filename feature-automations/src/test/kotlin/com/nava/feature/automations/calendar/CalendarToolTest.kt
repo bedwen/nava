@@ -106,7 +106,8 @@ class CalendarToolTest {
             requestId: String,
             utteranceProvenance: DataProvenance,
             candidateTools: Set<String>,
-            nowEpochMs: Long
+            nowEpochMs: Long,
+            maxToolCalls: Int
         ): CapabilityToken = error("Not used in tool unit tests")
 
         override suspend fun authorizeToolCall(

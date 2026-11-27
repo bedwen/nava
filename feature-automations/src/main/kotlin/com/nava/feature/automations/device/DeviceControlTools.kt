@@ -199,7 +199,9 @@ class SettingsPanelTool(
                 name = FIELD_PANEL,
                 description = "One of: internet, wifi, bluetooth, volume",
                 required = true,
-                slotKind = SensitiveSlotKind.INTENT_ACTION,
+                // A fixed panel key checked against SettingsPanelKind and the SETTINGS_PANEL
+                // outbound allowlist; it is not an Android intent action string.
+                slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
             )
         ),

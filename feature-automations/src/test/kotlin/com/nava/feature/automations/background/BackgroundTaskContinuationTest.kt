@@ -630,7 +630,8 @@ class FakeSecurityFirewall : SecurityFirewallPort {
         requestId: String,
         utteranceProvenance: DataProvenance,
         candidateTools: Set<String>,
-        nowEpochMs: Long
+        nowEpochMs: Long,
+        maxToolCalls: Int
     ): CapabilityToken {
         return CapabilityToken.mint(
             tokenId = "token",

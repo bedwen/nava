@@ -229,7 +229,8 @@ class ToolRegistryAndUseCaseTest {
                 requestId: String,
                 utteranceProvenance: DataProvenance,
                 candidateTools: Set<String>,
-                nowEpochMs: Long
+                nowEpochMs: Long,
+                maxToolCalls: Int
             ): CapabilityToken {
                 return CapabilityToken.mint("t", requestId, candidateTools, utteranceProvenance, nowEpochMs)
             }
@@ -364,7 +365,8 @@ class ToolRegistryAndUseCaseTest {
                 requestId: String,
                 utteranceProvenance: DataProvenance,
                 candidateTools: Set<String>,
-                nowEpochMs: Long
+                nowEpochMs: Long,
+                maxToolCalls: Int
             ) = CapabilityToken.mint("t", requestId, candidateTools, utteranceProvenance, nowEpochMs)
 
             override suspend fun authorizeToolCall(
@@ -859,7 +861,8 @@ class ToolRegistryAndUseCaseTest {
                 requestId: String,
                 utteranceProvenance: DataProvenance,
                 candidateTools: Set<String>,
-                nowEpochMs: Long
+                nowEpochMs: Long,
+                maxToolCalls: Int
             ) = CapabilityToken.mint("t", requestId, candidateTools, utteranceProvenance, nowEpochMs)
 
             override suspend fun authorizeToolCall(

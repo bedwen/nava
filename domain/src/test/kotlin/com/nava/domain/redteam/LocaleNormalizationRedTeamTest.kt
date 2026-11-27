@@ -374,7 +374,8 @@ class LocaleNormalizationRedTeamTest {
                     requestId: String,
                     utteranceProvenance: DataProvenance,
                     candidateTools: Set<String>,
-                    nowEpochMs: Long
+                    nowEpochMs: Long,
+                    maxToolCalls: Int
                 ): CapabilityToken = CapabilityToken.mint(
                     "tok-$badDetectedTag",
                     requestId,

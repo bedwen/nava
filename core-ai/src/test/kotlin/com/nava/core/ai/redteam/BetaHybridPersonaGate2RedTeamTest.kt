@@ -761,7 +761,8 @@ class BetaHybridPersonaGate2RedTeamTest {
             requestId: String,
             utteranceProvenance: DataProvenance,
             candidateTools: Set<String>,
-            nowEpochMs: Long
+            nowEpochMs: Long,
+            maxToolCalls: Int
         ): CapabilityToken {
             if (utteranceProvenance != DataProvenance.USER_UTTERANCE) {
                 throw SecurityException("Only USER_UTTERANCE may mint CapabilityToken")

@@ -238,6 +238,25 @@ class FirewallAndExtractorUnitTest {
             candidateTools = setOf("calendar_insert"),
             nowEpochMs = clockNowMs
         )
+        assertEquals(1, token.maxToolCalls)
+
+        // A plan that calls the same tool twice gets a two-call token; the ceiling still applies.
+        val repeated = firewall.mintToken(
+            requestId = "req_repeat",
+            utteranceProvenance = DataProvenance.USER_UTTERANCE,
+            candidateTools = setOf("calendar_insert"),
+            nowEpochMs = clockNowMs,
+            maxToolCalls = 2
+        )
+        assertEquals(2, repeated.maxToolCalls)
+        val capped = firewall.mintToken(
+            requestId = "req_many",
+            utteranceProvenance = DataProvenance.USER_UTTERANCE,
+            candidateTools = setOf("calendar_insert"),
+            nowEpochMs = clockNowMs,
+            maxToolCalls = 1_000
+        )
+        assertEquals(SecurityFirewall.MAX_PLAN_CALLS, capped.maxToolCalls)
 
         val calMeta = calendarInsertMetadata()
         val userCall = ToolCallAst(

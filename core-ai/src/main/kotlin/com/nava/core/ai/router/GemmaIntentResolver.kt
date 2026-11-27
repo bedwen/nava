@@ -275,7 +275,8 @@ class GemmaIntentResolver(
                     requestId = request.requestId,
                     utteranceProvenance = request.provenance,
                     candidateTools = candidateTools,
-                    nowEpochMs = request.issuedAtEpochMs
+                    nowEpochMs = request.issuedAtEpochMs,
+                    maxToolCalls = boundCalls.size
                 )
 
                 diagnose(

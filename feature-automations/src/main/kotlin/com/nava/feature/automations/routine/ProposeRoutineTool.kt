@@ -7,6 +7,7 @@ import com.nava.domain.security.AuditLogPort
 import com.nava.domain.security.DataProvenance
 import com.nava.domain.security.Gemma4InputSanitizer
 import com.nava.domain.security.RuleActionSpec
+import com.nava.domain.security.RuleApprovalState
 import com.nava.domain.security.RuleGrantPort
 import com.nava.domain.security.RuleTriggerSpec
 import com.nava.domain.security.SensitiveSlotKind
@@ -47,7 +48,9 @@ class ProposeRoutineTool(
     override val metadata: ToolMetadata = ToolMetadata(
         name = AutomationToolNames.PROPOSE_ROUTINE,
         displayNameKey = "tool_propose_routine_name",
-        description = "Drafts a Trigger -> Action automation routine for explicit user approval",
+        description = "Drafts a Trigger -> Action automation routine for explicit user approval. Example: " +
+            "rule_name=Evening, trigger_type=TIME_OF_DAY, trigger_time=22:00, " +
+            "action_tool=set_dnd,set_volume, action_args=enabled=true|level=20",
         category = ToolCategory.AUTOMATION_RULES,
         requiredCapability = AtomicCapability.CREATE_DRAFT,
         schemaVersion = 1,
@@ -77,7 +80,9 @@ class ProposeRoutineTool(
                 name = "action_tool",
                 description = "Nava tool to run when triggered; up to 3 comma-separated tools run in order (e.g. set_dnd,set_volume)",
                 required = true,
-                slotKind = SensitiveSlotKind.INTENT_ACTION,
+                // A Nava tool name, not an Android intent action: it is validated against the
+                // ToolRegistry here, and the outbound intent allowlist would reject every tool.
+                slotKind = SensitiveSlotKind.TEXT_BODY,
                 valueType = SlotValueType.STRING
             ),
             ToolSchemaField(
@@ -120,7 +125,7 @@ class ProposeRoutineTool(
             return ToolArgumentReader.invalidArgumentsFailure("rule_name must contain alphanumeric characters")
         }
 
-        val triggerType = triggerTypeRaw.trim().uppercase(Locale.US)
+        val triggerType = normalizeTriggerType(triggerTypeRaw)
         if (triggerType !in ALLOWED_TRIGGER_TYPES) {
             return ToolArgumentReader.invalidArgumentsFailure(
                 "Unsupported trigger_type '$triggerType'; allowed: ${ALLOWED_TRIGGER_TYPES.joinToString()}"
@@ -135,7 +140,13 @@ class ProposeRoutineTool(
                 "action_tool must name 1 to $MAX_ROUTINE_ACTIONS tools"
             )
         }
-        val argGroups = actionArgsRaw?.split('|').orEmpty()
+        val rawGroups = actionArgsRaw?.split('|').orEmpty()
+        // With a single tool, '|' can only be a separator between that tool's own arguments.
+        val argGroups = if (actionToolNames.size == 1 && rawGroups.size > 1) {
+            listOf(rawGroups.joinToString(";"))
+        } else {
+            rawGroups
+        }
         if (argGroups.size > actionToolNames.size) {
             return ToolArgumentReader.invalidArgumentsFailure("action_args has more groups than action_tool")
         }
@@ -173,16 +184,33 @@ class ProposeRoutineTool(
 
         val triggerParams = LinkedHashMap<String, String>()
         if (!triggerTimeRaw.isNullOrBlank()) {
-            triggerParams["time"] = triggerTimeRaw.trim()
+            triggerParams["time"] = normalizeTriggerTime(triggerTimeRaw)
         }
 
         val nowMs = clock()
+        val triggerSpec = RuleTriggerSpec(triggerType = triggerType, parameters = triggerParams)
+        // Small models often split one multi-step request into several calls with the same
+        // routine name. Merge them into the draft this tool created moments ago, as long as it is
+        // still pending approval and has the same trigger; never touch approved routines.
+        val recent = recentDrafts[ruleId]
+        val existing = ruleGrantPort.findRule(ruleId)
+        if (recent != null && nowMs - recent.first in 0..MERGE_WINDOW_MS && recent.second == triggerSpec &&
+            existing != null && existing.approvalState == RuleApprovalState.PENDING_USER_APPROVAL &&
+            existing.triggerSpec == triggerSpec
+        ) {
+            val merged = (existing.staticActions + actionSpecs).distinctBy { it.toolName }
+            if (merged.size > MAX_ROUTINE_ACTIONS) {
+                return ToolArgumentReader.invalidArgumentsFailure(
+                    "A routine can have at most $MAX_ROUTINE_ACTIONS actions"
+                )
+            }
+            actionSpecs.clear()
+            actionSpecs.addAll(merged)
+        }
+        recentDrafts[ruleId] = nowMs to triggerSpec
         val pendingGrant = ruleGrantPort.createPendingRule(
             ruleId = ruleId,
-            triggerSpec = RuleTriggerSpec(
-                triggerType = triggerType,
-                parameters = triggerParams
-            ),
+            triggerSpec = triggerSpec,
             staticActions = actionSpecs,
             nowEpochSec = nowMs / 1000L
         )
@@ -213,6 +241,8 @@ class ProposeRoutineTool(
         )
     }
 
+    private val recentDrafts = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, RuleTriggerSpec>>()
+
     private fun normalizeRuleId(name: String): String {
         val sb = StringBuilder(name.length)
         var lastWasDash = false
@@ -228,14 +258,32 @@ class ProposeRoutineTool(
         return sb.toString().trim('_').take(48)
     }
 
+    /** Maps common model spellings ("time", "daily", "every day") onto the canonical trigger types. */
+    private fun normalizeTriggerType(raw: String): String {
+        val upper = raw.trim().uppercase(Locale.US).replace(' ', '_').replace('-', '_')
+        return TRIGGER_TYPE_ALIASES[upper] ?: upper
+    }
+
+    /** "22" -> "22:00", "7.30" -> "07:30"; anything else is kept and validated downstream. */
+    private fun normalizeTriggerTime(raw: String): String {
+        val trimmed = raw.trim()
+        val match = TIME_REGEX.matchEntire(trimmed) ?: return trimmed
+        val hour = match.groupValues[1].toInt()
+        val minute = match.groupValues[2].ifEmpty { "0" }.toInt()
+        if (hour !in 0..23 || minute !in 0..59) return trimmed
+        return "%02d:%02d".format(Locale.US, hour, minute)
+    }
+
     private fun parseStaticArguments(raw: String?): Map<String, String> {
         if (raw.isNullOrBlank()) return emptyMap()
         val result = LinkedHashMap<String, String>()
-        for (segment in raw.split(';')) {
-            val idx = segment.indexOf('=')
+        // Also accept "key:value" and comma-separated pairs, which small models often emit.
+        for (segment in raw.split(';', ',')) {
+            val idx = segment.indexOf('=').takeIf { it > 0 } ?: segment.indexOf(':')
             if (idx <= 0 || idx >= segment.lastIndex) continue
-            val key = segment.substring(0, idx).trim()
-            val value = segment.substring(idx + 1).trim()
+            val key = segment.substring(0, idx).trim(*ARG_EDGE_CHARS)
+            val value = segment.substring(idx + 1).trim(*ARG_EDGE_CHARS)
+            if (value == "null") continue
             if (key.isNotEmpty() && value.isNotEmpty()) {
                 result[key] = value
             }
@@ -245,12 +293,30 @@ class ProposeRoutineTool(
 
     companion object {
         const val MAX_ROUTINE_ACTIONS: Int = 3
+        private const val MERGE_WINDOW_MS: Long = 60_000L
 
         /** Tools that must never run from a routine (no self-replicating or memory-writing routines). */
         val NON_ROUTINE_ACTIONS: Set<String> = setOf(
             AutomationToolNames.PROPOSE_ROUTINE,
             AutomationToolNames.REMEMBER_FACT,
             AutomationToolNames.FORGET_FACT
+        )
+
+        private val ARG_EDGE_CHARS: CharArray = charArrayOf(' ', '"', '\'', '{', '}', '\u201C', '\u201D')
+
+        private val TIME_REGEX = Regex("^(\\d{1,2})(?:[:.](\\d{2}))?$")
+
+        private val TRIGGER_TYPE_ALIASES: Map<String, String> = mapOf(
+            "TIME" to "TIME_OF_DAY",
+            "DAILY" to "TIME_OF_DAY",
+            "EVERY_DAY" to "TIME_OF_DAY",
+            "SCHEDULE" to "TIME_OF_DAY",
+            "SCHEDULED" to "TIME_OF_DAY",
+            "AT_TIME" to "TIME_OF_DAY",
+            "CHARGER" to "CHARGING",
+            "POWER_CONNECTED" to "CHARGING",
+            "STARTUP" to "BOOT",
+            "ON_BOOT" to "BOOT"
         )
 
         val ALLOWED_TRIGGER_TYPES: Set<String> = setOf(

@@ -379,7 +379,8 @@ internal class StrictRedTeamFirewall(
         requestId: String,
         utteranceProvenance: DataProvenance,
         candidateTools: Set<String>,
-        nowEpochMs: Long
+        nowEpochMs: Long,
+        maxToolCalls: Int
     ): CapabilityToken {
         if (utteranceProvenance != DataProvenance.USER_UTTERANCE) {
             throw SecurityException("Minting denied for provenance $utteranceProvenance")

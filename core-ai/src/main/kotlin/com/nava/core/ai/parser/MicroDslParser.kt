@@ -503,6 +503,9 @@ class MicroDslParser {
 
             return when (val ch = src[pos]) {
                 '"' -> readDoubleQuotedString()
+                // Small models sometimes emit typographic quotes; accept them as plain string
+                // delimiters (same rules: no line breaks, no nesting, no escapes).
+                '\u201C' -> readTypographicQuotedString()
                 '{', '[' -> ValueResult(
                     error = MicroDslAst.ParseError(
                         rawFragment = remainingFragment(),
@@ -576,6 +579,30 @@ class MicroDslParser {
                         )
                     )
 
+                    else -> sb.append(ch)
+                }
+            }
+            return ValueResult(
+                error = MicroDslAst.ParseError(
+                    rawFragment = src.take(ERROR_FRAGMENT_LIMIT),
+                    reason = "Unterminated quoted string"
+                )
+            )
+        }
+
+        private fun readTypographicQuotedString(): ValueResult {
+            pos++ // consume opening U+201C
+            val sb = StringBuilder()
+            while (pos < len) {
+                val ch = src[pos++]
+                when (ch) {
+                    '\u201D', '\u201C' -> return ValueResult(value = SlotValueAst.StringValue(sb.toString()))
+                    '\n', '\r' -> return ValueResult(
+                        error = MicroDslAst.ParseError(
+                            rawFragment = remainingFragment(),
+                            reason = "Unescaped line break inside quoted string"
+                        )
+                    )
                     else -> sb.append(ch)
                 }
             }
